@@ -312,17 +312,27 @@ curl -X POST "https://localhost:5081/api/projects" -k \
      -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
      -d '{"organizationId":"<org-guid>","name":"ACME Onboarding Q3","description":"Kickoff through go-live"}'
 
-# Add a member to the project
+# Add and then remove a member from the project
 curl -X POST "https://localhost:5081/api/projects/<project-guid>/members" -k \
      -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
      -d '{"userId":"<agent-guid>"}'
+
+curl -X DELETE "https://localhost:5081/api/projects/<project-guid>/members/<agent-guid>" -k \
+     -H "Authorization: Bearer $TOKEN"
+
+# Archive a project, then bring it back
+curl -X POST "https://localhost:5081/api/projects/<project-guid>/archive" -k \
+     -H "Authorization: Bearer $TOKEN"
+
+curl -X POST "https://localhost:5081/api/projects/<project-guid>/unarchive" -k \
+     -H "Authorization: Bearer $TOKEN"
 
 # Create a team (Del 7) — the "internal organization" kind, e.g. a support tier
 curl -X POST "https://localhost:5081/api/teams" -k \
      -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
      -d '{"organizationId":"<org-guid>","name":"Support Tier 1"}'
 
-# Add and then remove a team member (unlike Project, Team supports removal — see TeamsController)
+# Add and then remove a team member
 curl -X POST "https://localhost:5081/api/teams/<team-guid>/members" -k \
      -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
      -d '{"userId":"<agent-guid>"}'

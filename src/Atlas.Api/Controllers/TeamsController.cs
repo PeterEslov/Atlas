@@ -77,9 +77,9 @@ public sealed class TeamsController : ControllerBase
     }
 
     /// <summary>
-    /// DELETE /api/teams/{id}/members/{userId} — unlike Project (see
-    /// ProjectsController.AddMember's doc comment), Team's domain type does
-    /// have a RemoveMember method, so this is a real endpoint, not a gap.
+    /// DELETE /api/teams/{id}/members/{userId} — mirrors
+    /// ProjectsController.RemoveMember (Team.RemoveMember was the one that
+    /// existed first; Project.RemoveMember was added later to match it).
     /// </summary>
     [HttpDelete("{id:guid}/members/{userId:guid}")]
     [Authorize(Policy = Permissions.TeamManage)]

@@ -67,12 +67,13 @@ for a single organization, but a textbook N+1 if repeated once per row of a
   background worker and Del 12's Service Bus consumers).
 - `Attachment.BlobName` is a plain string column; there is no upload
   endpoint yet. Phase 3 (Del 10) adds Azure Blob Storage and the upload flow.
-- `Project` has no `RemoveMember` or `Unarchive` method (Del 7 only exposes
-  what the domain type already supports), while `Team` has both `AddMember`
-  and `RemoveMember`. This is a genuine, documented gap rather than an
-  oversight — see the doc comment on `ProjectService` — and the fix is to add
-  the method to `Project` first, since the domain owns the rule, not the
-  service.
+- `Ticket` still has no way to remove a tag, reopen itself via the API (the
+  domain method `Reopen` exists, it's just not wired to a controller yet), or
+  be filtered by `ProjectId` — this is the "richer ticket workflows" scope
+  mentioned in the roadmap, separate from Del 7's Project/Team scope.
+  `Permissions.TicketDelete` is defined and granted to Manager/Admin but has
+  no matching endpoint at all yet — a dangling permission, not a bug, but
+  worth knowing about if you go looking for where it's enforced.
 - Connection strings live in `appsettings.Development.json` / user-secrets
   for now. Phase 3 (Del 20) replaces this with Azure Key Vault +
   `DefaultAzureCredential` — no secrets in App Service configuration.

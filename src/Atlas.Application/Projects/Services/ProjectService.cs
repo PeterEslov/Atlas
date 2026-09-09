@@ -10,13 +10,11 @@ namespace Atlas.Application.Projects.Services;
 /// <summary>
 /// Orchestrates project use cases — the same shape as OrganizationService and
 /// UserService: load via the repository, invoke the domain method that owns
-/// the business rule (Project.Create/AddMember/Archive), persist via the unit
-/// of work, map to a DTO. There is deliberately no RemoveMember or Unarchive
-/// here yet — Project's domain type doesn't expose either method (unlike Team,
-/// which does support RemoveMember), so adding them to the service without a
-/// domain method to call would just be putting the rule in the wrong layer.
-/// Treat this as a known, honest gap rather than an oversight: it's easy to
-/// add both later by adding the method to Project first.
+/// the business rule (Project.Create/AddMember/RemoveMember/Archive/Unarchive),
+/// persist via the unit of work, map to a DTO. Project.RemoveMember and
+/// Project.Unarchive were added specifically to close out Del 7 — until then
+/// Project trailed Team, which already supported removing a member; both now
+/// mirror Team's shape exactly.
 /// </summary>
 public sealed class ProjectService : IProjectService
 {
@@ -80,6 +78,17 @@ public sealed class ProjectService : IProjectService
         return ToDetailDto(project, await _projectRepository.GetMemberDetailsAsync(id, cancellationToken));
     }
 
+    public async Task<ProjectDetailDto> UnarchiveAsync(Guid id, CancellationToken cancellationToken)
+    {
+        var project = await GetProjectOrThrowAsync(id, cancellationToken);
+
+        project.Unarchive();
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        _logger.LogInformation("Project {ProjectId} unarchived", id);
+        return ToDetailDto(project, await _projectRepository.GetMemberDetailsAsync(id, cancellationToken));
+    }
+
     public async Task<ProjectDetailDto> AddMemberAsync(Guid id, AddProjectMemberRequest request, CancellationToken cancellationToken)
     {
         var project = await GetProjectOrThrowAsync(id, cancellationToken);
@@ -91,6 +100,20 @@ public sealed class ProjectService : IProjectService
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         _logger.LogInformation("User {UserId} added to project {ProjectId}", request.UserId, id);
+        return ToDetailDto(project, await _projectRepository.GetMemberDetailsAsync(id, cancellationToken));
+    }
+
+    public async Task<ProjectDetailDto> RemoveMemberAsync(Guid id, Guid userId, CancellationToken cancellationToken)
+    {
+        var project = await GetProjectOrThrowAsync(id, cancellationToken);
+
+        // Project.RemoveMember is a deliberate no-op if userId isn't a member —
+        // see the doc comment on Project.RemoveMember / TeamService.RemoveMemberAsync
+        // for why that's the right call here.
+        project.RemoveMember(userId);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        _logger.LogInformation("User {UserId} removed from project {ProjectId}", userId, id);
         return ToDetailDto(project, await _projectRepository.GetMemberDetailsAsync(id, cancellationToken));
     }
 

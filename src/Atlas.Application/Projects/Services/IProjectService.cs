@@ -13,5 +13,9 @@ public interface IProjectService
 
     Task<ProjectDetailDto> ArchiveAsync(Guid id, CancellationToken cancellationToken);
 
+    Task<ProjectDetailDto> UnarchiveAsync(Guid id, CancellationToken cancellationToken);
+
     Task<ProjectDetailDto> AddMemberAsync(Guid id, AddProjectMemberRequest request, CancellationToken cancellationToken);
+
+    Task<ProjectDetailDto> RemoveMemberAsync(Guid id, Guid userId, CancellationToken cancellationToken);
 }

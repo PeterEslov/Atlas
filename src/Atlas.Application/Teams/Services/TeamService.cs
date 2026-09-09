@@ -8,10 +8,9 @@ using Microsoft.Extensions.Logging;
 namespace Atlas.Application.Teams.Services;
 
 /// <summary>
-/// Orchestrates team use cases — mirrors ProjectService's shape, with one
-/// difference: Team.RemoveMember exists on the domain entity (Project's
-/// doesn't yet), so RemoveMemberAsync is a real endpoint here rather than a
-/// documented gap.
+/// Orchestrates team use cases — mirrors ProjectService's shape exactly.
+/// Team.RemoveMember existed on the domain entity from the start; it's what
+/// Project.RemoveMember was later added to match, closing out Del 7.
 /// </summary>
 public sealed class TeamService : ITeamService
 {

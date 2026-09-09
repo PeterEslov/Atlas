@@ -43,9 +43,29 @@ public sealed class Project : Entity
         return member;
     }
 
+    /// <summary>
+    /// Deliberate no-op if userId isn't a member — removing someone who isn't
+    /// there already gets you to the state you wanted, so there's no invariant
+    /// to protect here. Mirrors Team.RemoveMember exactly; see TeamTests for
+    /// the same reasoning spelled out.
+    /// </summary>
+    public void RemoveMember(Guid userId)
+    {
+        var existing = _members.FirstOrDefault(m => m.UserId == userId);
+        if (existing is null) return;
+        _members.Remove(existing);
+        MarkModified();
+    }
+
     public void Archive()
     {
         IsArchived = true;
+        MarkModified();
+    }
+
+    public void Unarchive()
+    {
+        IsArchived = false;
         MarkModified();
     }
 }

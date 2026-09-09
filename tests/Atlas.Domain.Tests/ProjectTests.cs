@@ -54,9 +54,31 @@ public class ProjectTests
         var userId = Guid.NewGuid();
         project.AddMember(userId);
 
-        // A project has no RemoveMember (unlike Team) — see the doc comment on
-        // ProjectService for why that's a known, deliberate gap for now.
         Assert.Throws<DomainException>(() => project.AddMember(userId));
+    }
+
+    [Fact]
+    public void RemoveMember_ExistingMember_RemovesThem()
+    {
+        var project = Project.Create(Guid.NewGuid(), "ACME Onboarding Q3");
+        var userId = Guid.NewGuid();
+        project.AddMember(userId);
+
+        project.RemoveMember(userId);
+
+        Assert.Empty(project.Members);
+    }
+
+    [Fact]
+    public void RemoveMember_UnknownUser_IsANoOp()
+    {
+        var project = Project.Create(Guid.NewGuid(), "ACME Onboarding Q3");
+
+        // Same reasoning as TeamTests.RemoveMember_UnknownUser_IsANoOp — removing
+        // someone who isn't a member already gets you to the state you wanted.
+        var exception = Record.Exception(() => project.RemoveMember(Guid.NewGuid()));
+
+        Assert.Null(exception);
     }
 
     [Fact]
@@ -67,5 +89,16 @@ public class ProjectTests
         project.Archive();
 
         Assert.True(project.IsArchived);
+    }
+
+    [Fact]
+    public void Unarchive_ThenReactivate_RestoresIsArchivedFalse()
+    {
+        var project = Project.Create(Guid.NewGuid(), "ACME Onboarding Q3");
+        project.Archive();
+
+        project.Unarchive();
+
+        Assert.False(project.IsArchived);
     }
 }
