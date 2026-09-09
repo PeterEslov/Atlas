@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Atlas.Application</RootNamespace>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Atlas.Domain\Atlas.Domain.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
+  </ItemGroup>
+
+  <!--
+    Atlas.Application depends only on Atlas.Domain. It defines the interfaces
+    (ITicketRepository, IUnitOfWork, ICurrentUserService, ...) that
+    Atlas.Infrastructure implements — the Dependency Inversion Principle in
+    action. No EF Core, no ASP.NET Core references belong here.
+  -->
+
+</Project>

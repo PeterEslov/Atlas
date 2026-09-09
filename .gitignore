@@ -1,0 +1,46 @@
+## .NET
+bin/
+obj/
+out/
+
+## Visual Studio / Rider
+.vs/
+.idea/
+*.user
+*.suo
+
+## Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+
+## Test results
+TestResults/
+*.trx
+coverage/
+*.coverage
+*.coveragexml
+
+## User-specific
+*.rsuser
+*.userosscache
+*.sln.docstates
+
+## Secrets — never commit these
+appsettings.Local.json
+appsettings.*.local.json
+*.pfx
+.env
+
+## Azure / deployment
+*.PublishSettings
+.azure/
+
+## Node (if a React frontend is added later)
+node_modules/
+dist/
+
+## OS files
+.DS_Store
+Thumbs.db

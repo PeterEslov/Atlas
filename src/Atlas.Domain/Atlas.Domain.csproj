@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Atlas.Domain</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <WarningsAsErrors />
+  </PropertyGroup>
+
+  <!--
+    Atlas.Domain has zero external dependencies by design.
+    No EF Core, no ASP.NET Core, no Azure SDK — only plain C#.
+    This is the innermost layer of the Clean Architecture ring:
+    everything else depends on it, it depends on nothing.
+  -->
+
+</Project>

@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Atlas.Api</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <UserSecretsId>atlas-api-9f2b3c7e-6d4a-4b1e-9a0f-1c2d3e4f5a6b</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Atlas.Application\Atlas.Application.csproj" />
+    <ProjectReference Include="..\Atlas.Infrastructure\Atlas.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Microsoft.AspNetCore.OpenApi generates the /openapi/v1.json document
+      (built into the ASP.NET Core stack, no third-party dependency). Only the
+      UI sub-package of Swashbuckle is referenced — not the full
+      Swashbuckle.AspNetCore meta-package — specifically to avoid pulling in
+      its SwaggerGen/Microsoft.OpenApi.Models dependency chain, whose types
+      moved namespace in the Microsoft.OpenApi 2.x line and broke a manually
+      constructed OpenApiInfo here. SwaggerUI itself just needs a JSON URL to
+      point at, so it has no such dependency.
+    -->
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.12" />
+    <PackageReference Include="Swashbuckle.AspNetCore.SwaggerUI" Version="10.2.3" />
+
+    <!-- JWT bearer authentication for Del 5. -->
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
+
+    <!--
+      The EF Core CLI tools (`dotnet ef migrations add`, `dotnet ef database
+      update`) load their design-time services from the *startup* project's
+      dependency graph, not just the project that actually owns the
+      DbContext — so Atlas.Api needs its own reference to
+      Microsoft.EntityFrameworkCore.Design even though Atlas.Infrastructure
+      already has one. PrivateAssets="all" keeps it out of the published
+      output; it's a build/tooling-only dependency.
+    -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.0">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+</Project>
