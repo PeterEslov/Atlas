@@ -10,7 +10,7 @@ namespace Atlas.Domain.Entities;
 /// is an opaque string produced by an <c>IPasswordHasher</c> in the application/
 /// infrastructure layers — this entity never hashes or verifies passwords itself,
 /// it only stores the result, keeping Atlas.Domain free of any crypto dependency.
-/// Swapping to Azure Entra ID later (Del 18) means this column simply stops being
+/// Swapping to Azure Entra ID later (Del 20) means this column simply stops being
 /// written; nothing else about the entity needs to change.
 /// </summary>
 public sealed class User : Entity

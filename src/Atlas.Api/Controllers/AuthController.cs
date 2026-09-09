@@ -8,7 +8,7 @@ namespace Atlas.Api.Controllers;
 /// Registration and login for Del 5's local JWT authentication. Both endpoints
 /// are anonymous by design — you can't authenticate your way into getting a
 /// token. Every other controller in the API requires a valid bearer token from
-/// here (or, from Del 6 onward, Azure Entra ID) plus the matching permission
+/// here (or, from Del 20 onward, Azure Entra ID) plus the matching permission
 /// policy.
 /// </summary>
 [ApiController]

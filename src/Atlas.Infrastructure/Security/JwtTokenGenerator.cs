@@ -26,7 +26,7 @@ public sealed class JwtTokenGenerator : IJwtTokenGenerator
         {
             throw new InvalidOperationException(
                 "Jwt:SigningKey is missing or shorter than 32 bytes (256 bits). Set it in appsettings.Development.json " +
-                "for local dev, or via Key Vault / App Service configuration in Azure (Del 18).");
+                "for local dev, or via Key Vault / App Service configuration in Azure (Del 20).");
         }
     }
 

@@ -3,7 +3,7 @@ namespace Atlas.Infrastructure.Security;
 /// <summary>
 /// Bound from the "Jwt" configuration section (appsettings.Development.json for
 /// local dev). SigningKey must be at least 32 characters (256 bits) for HS256.
-/// In Azure this moves to Key Vault via DefaultAzureCredential — see Del 18 —
+/// In Azure this moves to Key Vault via DefaultAzureCredential — see Del 20 —
 /// never committed as a real secret past local development.
 /// </summary>
 public sealed class JwtSettings

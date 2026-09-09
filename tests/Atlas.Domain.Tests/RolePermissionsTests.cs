@@ -44,10 +44,24 @@ public class RolePermissionsTests
 
         Assert.Contains(Permissions.TicketDelete, managerPermissions);
         Assert.Contains(Permissions.ProjectManage, managerPermissions);
+        Assert.Contains(Permissions.TeamManage, managerPermissions);
         Assert.Contains(Permissions.UserRead, managerPermissions);
         Assert.Contains(Permissions.UserManage, managerPermissions);
         Assert.Contains(Permissions.OrganizationRead, managerPermissions);
         Assert.DoesNotContain(Permissions.OrganizationManage, managerPermissions);
+    }
+
+    [Fact]
+    public void Manager_CanReadAndManageTeams_SameTrustLevelAsProjects()
+    {
+        // Team.Manage (Del 7) deliberately mirrors Project.Manage rather than
+        // Organization.Manage — see the doc comment on RolePermissions for why:
+        // an internal team is something a Manager routinely creates within
+        // their own organization, not a tenant-boundary change.
+        var managerPermissions = RolePermissions.For(UserRole.Manager);
+
+        Assert.Contains(Permissions.TeamRead, managerPermissions);
+        Assert.Contains(Permissions.TeamManage, managerPermissions);
     }
 
     [Theory]

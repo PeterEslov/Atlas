@@ -5,7 +5,7 @@ namespace Atlas.Domain.Entities;
 
 /// <summary>
 /// Metadata for a file attached to a ticket. The file's bytes live in Azure Blob
-/// Storage (see Del 8) — only the pointer (<see cref="BlobName"/>) is stored here,
+/// Storage (see Del 10) — only the pointer (<see cref="BlobName"/>) is stored here,
 /// which is the standard split between relational data and object/file storage.
 /// </summary>
 public sealed class Attachment : Entity

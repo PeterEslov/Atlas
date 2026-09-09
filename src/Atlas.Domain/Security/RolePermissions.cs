@@ -9,7 +9,8 @@ namespace Atlas.Domain.Security;
 ///   Customer -> Ticket.Read, Ticket.Create
 ///   Agent    -> Customer + Ticket.Update, Ticket.Assign
 ///   Manager  -> Agent + Ticket.Delete, Project.Read, Project.Manage,
-///               User.Read, User.Manage, Organization.Read
+///               Team.Read, Team.Manage, User.Read, User.Manage,
+///               Organization.Read
 ///   Admin    -> everything, including Organization.Manage
 ///
 /// Organization.Manage (create/rename/deactivate an organization — i.e. adding
@@ -19,6 +20,11 @@ namespace Atlas.Domain.Security;
 /// role, deactivate/reactivate a person) is granted to Manager as well as
 /// Admin, on the assumption a Manager runs their own team day-to-day —
 /// tighten this to Admin-only later if that assumption turns out wrong.
+/// Project.Manage and Team.Manage (Del 7) get the same Manager-level trust as
+/// User.Manage, not the Organization.Manage treatment: creating a project or
+/// an internal team is routine day-to-day work *inside* an organization a
+/// Manager already belongs to, not a tenant-boundary change, so there is no
+/// reason to reserve it for Admin the way Organization.Manage is.
 ///
 /// Looked up once at login time and baked into the JWT as "permission" claims
 /// (see Atlas.Infrastructure's JwtTokenGenerator) — a role change takes effect
@@ -49,6 +55,8 @@ public static class RolePermissions
             Permissions.TicketDelete,
             Permissions.ProjectRead,
             Permissions.ProjectManage,
+            Permissions.TeamRead,
+            Permissions.TeamManage,
             Permissions.UserRead,
             Permissions.UserManage,
             Permissions.OrganizationRead

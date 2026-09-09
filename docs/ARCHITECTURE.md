@@ -41,9 +41,14 @@ is recorded in its history" can't be worked around by constructing a
 `ITicketRepository` is deliberately **not** a generic `IRepository<T>`.
 Tickets have query needs — filtering, paging, conditional eager-loading of
 Comments/History/Tags — that a one-size-fits-all abstraction only gets in
-the way of. `IUserRepository` and `IOrganizationRepository` (Del 6) follow
-the same non-generic shape; `IProjectRepository`/`ITeamRepository` will too
-once Projects/Teams get their own controllers later in Phase 2.
+the way of. `IUserRepository`, `IOrganizationRepository` (Del 6), and
+`IProjectRepository`/`ITeamRepository` (Del 7) all follow the same
+non-generic shape. `IProjectRepository` and `ITeamRepository` also introduce
+a pattern the earlier repositories didn't need: `GetMemberCountsAsync` runs
+one `GROUP BY` query for a whole page of ids, rather than one `COUNT(*)` per
+row (which is what `OrganizationRepository.GetChildCountsAsync` does — fine
+for a single organization, but a textbook N+1 if repeated once per row of a
+25-row page).
 
 ## Current known simplifications (by design)
 
@@ -58,12 +63,18 @@ once Projects/Teams get their own controllers later in Phase 2.
   real deployment would replace with an invite flow or a
   default-to-Customer policy before going anywhere near production.
 - `AuditLog` and `Notification` tables exist in the schema but nothing
-  writes to them yet — they're wired up in Phase 4 (Service Bus consumers)
-  and Phase 9 (the overdue-ticket background worker).
+  writes to them yet — they're wired up in Phase 4 (Del 11's overdue-ticket
+  background worker and Del 12's Service Bus consumers).
 - `Attachment.BlobName` is a plain string column; there is no upload
-  endpoint yet. Phase 3 adds Azure Blob Storage and the upload flow.
+  endpoint yet. Phase 3 (Del 10) adds Azure Blob Storage and the upload flow.
+- `Project` has no `RemoveMember` or `Unarchive` method (Del 7 only exposes
+  what the domain type already supports), while `Team` has both `AddMember`
+  and `RemoveMember`. This is a genuine, documented gap rather than an
+  oversight — see the doc comment on `ProjectService` — and the fix is to add
+  the method to `Project` first, since the domain owns the rule, not the
+  service.
 - Connection strings live in `appsettings.Development.json` / user-secrets
-  for now. Phase 3/18 replaces this with Azure Key Vault +
+  for now. Phase 3 (Del 20) replaces this with Azure Key Vault +
   `DefaultAzureCredential` — no secrets in App Service configuration.
   The JWT signing key in `appsettings.Development.json` has the same issue
   and the same eventual fix.

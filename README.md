@@ -7,10 +7,11 @@ Clean Architecture, EF Core against Azure SQL, and a build-out path through
 authentication, messaging, caching, observability, containers and CI/CD.
 
 This repository currently covers **Phase 1 — Foundation** (solution
-structure, the full SQL data model, EF Core, the first real API) and two
+structure, the full SQL data model, EF Core, the first real API) and three
 slices of **Phase 2 — Real application**: local JWT authentication with
-permission-based authorization (Del 5), and Organizations & Users management
-(Del 6). Later phases are tracked in [Roadmap](#roadmap) below.
+permission-based authorization (Del 5), Organizations & Users management
+(Del 6), and Projects & Teams management (Del 7). Later phases are tracked in
+[Roadmap](#roadmap) below.
 
 ## Architecture
 
@@ -25,6 +26,8 @@ flowchart TB
         AC[AuthController]
         OC[OrganizationsController]
         UC[UsersController]
+        PC[ProjectsController]
+        TC[TeamsController]
         MW[Exception-handling middleware]
         JWTMW["JWT bearer auth + policy-based authorization"]
     end
@@ -34,7 +37,9 @@ flowchart TB
         AUTH[AuthService]
         OSVC[OrganizationService]
         USVC[UserService]
-        IF["Interfaces: ITicketRepository, IUserRepository, IOrganizationRepository, IUnitOfWork, ICurrentUserService"]
+        PSVC[ProjectService]
+        TSVC[TeamService]
+        IF["Interfaces: ITicketRepository, IUserRepository, IOrganizationRepository, IProjectRepository, ITeamRepository, IUnitOfWork, ICurrentUserService"]
     end
 
     subgraph DOM["Atlas.Domain"]
@@ -48,6 +53,8 @@ flowchart TB
         REPO[TicketRepository]
         UREPO[UserRepository]
         OREPO[OrganizationRepository]
+        PREPO[ProjectRepository]
+        TREPO[TeamRepository]
         JWT["JwtTokenGenerator / Pbkdf2PasswordHasher"]
     end
 
@@ -57,6 +64,8 @@ flowchart TB
     SW --> AC --> AUTH
     SW --> OC --> OSVC
     SW --> UC --> USVC
+    SW --> PC --> PSVC
+    SW --> TC --> TSVC
     JWTMW -.authorizes against.-> PERM
     AUTH --> JWT
     AUTH -.implements.-> IF
@@ -64,13 +73,19 @@ flowchart TB
     SVC -.implements.-> IF
     OSVC -.implements.-> IF
     USVC -.implements.-> IF
+    PSVC -.implements.-> IF
+    TSVC -.implements.-> IF
     REPO -.implements.-> IF
     UREPO -.implements.-> IF
     OREPO -.implements.-> IF
+    PREPO -.implements.-> IF
+    TREPO -.implements.-> IF
     SVC --> REPO --> DB --> SQL
     AUTH --> UREPO --> DB
     OSVC --> OREPO --> DB
     USVC --> UREPO --> DB
+    PSVC --> PREPO --> DB
+    TSVC --> TREPO --> DB
 ```
 
 Dependencies point inward, Clean-Architecture style:
@@ -111,12 +126,15 @@ ProjectAtlas.sln
 src/
   Atlas.Domain/            Entities, enums, domain exceptions, Permissions/RolePermissions
   Atlas.Application/       DTOs, service interfaces — TicketService, AuthService,
-                           OrganizationService, UserService
+                           OrganizationService, UserService, ProjectService, TeamService
   Atlas.Infrastructure/    EF Core DbContext, entity configurations, repositories
-                           (Ticket, User, Organization), JwtTokenGenerator, Pbkdf2PasswordHasher
-  Atlas.Api/                Controllers (Tickets, Auth, Organizations, Users), Program.cs, appsettings
+                           (Ticket, User, Organization, Project, Team), JwtTokenGenerator,
+                           Pbkdf2PasswordHasher
+  Atlas.Api/                Controllers (Tickets, Auth, Organizations, Users, Projects, Teams),
+                           Program.cs, appsettings
 tests/
-  Atlas.Domain.Tests/       xUnit tests for Ticket's business rules, RolePermissions, User, Organization
+  Atlas.Domain.Tests/       xUnit tests for Ticket's business rules, RolePermissions, User,
+                           Organization, Project, Team
 sql/
   001_InitialSchema.sql     Hand-written T-SQL reference (see note below)
   002_SeedData.sql          Optional demo data (Northstar IT / ACME AB / one ticket)
@@ -288,6 +306,29 @@ curl "https://localhost:5081/api/users?organizationId=<org-guid>&page=1&pageSize
 curl -X POST "https://localhost:5081/api/users/<user-guid>/role" -k \
      -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
      -d '{"role":1}'
+
+# Create a project (Del 7) — the "externally-facing work" kind, e.g. a customer engagement
+curl -X POST "https://localhost:5081/api/projects" -k \
+     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+     -d '{"organizationId":"<org-guid>","name":"ACME Onboarding Q3","description":"Kickoff through go-live"}'
+
+# Add a member to the project
+curl -X POST "https://localhost:5081/api/projects/<project-guid>/members" -k \
+     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+     -d '{"userId":"<agent-guid>"}'
+
+# Create a team (Del 7) — the "internal organization" kind, e.g. a support tier
+curl -X POST "https://localhost:5081/api/teams" -k \
+     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+     -d '{"organizationId":"<org-guid>","name":"Support Tier 1"}'
+
+# Add and then remove a team member (unlike Project, Team supports removal — see TeamsController)
+curl -X POST "https://localhost:5081/api/teams/<team-guid>/members" -k \
+     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+     -d '{"userId":"<agent-guid>"}'
+
+curl -X DELETE "https://localhost:5081/api/teams/<team-guid>/members/<agent-guid>" -k \
+     -H "Authorization: Bearer $TOKEN"
 ```
 
 ### 6. Run the tests
@@ -306,7 +347,7 @@ endpoints in the API. Every other endpoint requires an
   (`Atlas.Infrastructure/Security`), valid for `Jwt:ExpiryMinutes` (60 by
   default). The signing key lives in `appsettings.Development.json` for
   local dev only — see the comment on `JwtSettings` for why that's fine here
-  but not in Azure (Del 18 moves it to Key Vault).
+  but not in Azure (Del 20 moves it to Key Vault).
 - **Passwords** are hashed with PBKDF2-HMAC-SHA256, 100,000 iterations, via
   `Pbkdf2PasswordHasher` — no external hashing package, just the BCL's
   `System.Security.Cryptography`.
@@ -338,6 +379,13 @@ endpoints in the API. Every other endpoint requires an
   `POST /api/users/{id}/role` only takes effect the next time that user logs
   in — the token they're currently holding still carries their old
   `"permission"` claims until it expires or they sign in again.
+- **Project.Manage and Team.Manage (Del 7) sit at the same Manager+Admin trust
+  level as User.Manage**, not the Admin-only Organization.Manage — creating a
+  project or an internal team is routine work *inside* an organization a
+  Manager already belongs to, not a tenant-boundary change. `Project.Read`/
+  `Project.Manage` existed in `Permissions` since early on but had no
+  controller wired up to them until this Del; `Team.Read`/`Team.Manage` are
+  new permissions introduced by it.
 
 ## Business rules worth reading
 
@@ -360,8 +408,8 @@ database.
 
 - [x] **Phase 1 — Foundation**: solution, SQL data model, EF Core, first API (this repo)
 - [~] **Phase 2 — Real application**: local JWT auth & permission policies (Del 5),
-      Organizations & Users management (Del 6) done; Projects/Teams endpoints and
-      richer ticket workflows still to come
+      Organizations & Users management (Del 6), Projects & Teams management
+      (Del 7) done; richer ticket workflows still to come
 - [ ] **Phase 3 — Azure**: Azure SQL, App Service, Blob Storage, Key Vault
 - [ ] **Phase 4 — Enterprise**: Service Bus, background worker, Redis, audit logging
 - [ ] **Phase 5 — Quality**: broader test suite, Docker, structured logging, monitoring
@@ -369,5 +417,5 @@ database.
 - [ ] **Phase 7 — Polish**: React frontend, dashboard, demo environment
 
 See the conversation history / project notes for the detailed breakdown of
-each phase (Del 1–20) — each one lands as its own set of commits/PRs so the
+each phase (Del 1–22) — each one lands as its own set of commits/PRs so the
 git history itself becomes part of the portfolio.

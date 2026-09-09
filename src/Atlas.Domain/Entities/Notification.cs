@@ -5,8 +5,8 @@ namespace Atlas.Domain.Entities;
 
 /// <summary>
 /// An in-app/email notification queued for a user. Created by domain/application
-/// logic when something notification-worthy happens (see Del 9's overdue-ticket
-/// worker and Del 10's Service Bus events); delivery itself is an infrastructure
+/// logic when something notification-worthy happens (see Del 11's overdue-ticket
+/// worker and Del 12's Service Bus events); delivery itself is an infrastructure
 /// concern handled elsewhere.
 /// </summary>
 public sealed class Notification : Entity

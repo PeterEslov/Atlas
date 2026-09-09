@@ -21,6 +21,9 @@ public static class Permissions
     public const string ProjectRead = "Project.Read";
     public const string ProjectManage = "Project.Manage";
 
+    public const string TeamRead = "Team.Read";
+    public const string TeamManage = "Team.Manage";
+
     public const string OrganizationRead = "Organization.Read";
     public const string OrganizationManage = "Organization.Manage";
 
@@ -30,6 +33,7 @@ public static class Permissions
         TicketRead, TicketCreate, TicketUpdate, TicketAssign, TicketDelete,
         UserRead, UserManage,
         ProjectRead, ProjectManage,
+        TeamRead, TeamManage,
         OrganizationRead, OrganizationManage
     ];
 }

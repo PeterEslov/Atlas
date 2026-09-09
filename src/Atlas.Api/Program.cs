@@ -5,6 +5,8 @@ using Atlas.Api.Services;
 using Atlas.Application.Auth.Services;
 using Atlas.Application.Common.Interfaces;
 using Atlas.Application.Organizations.Services;
+using Atlas.Application.Projects.Services;
+using Atlas.Application.Teams.Services;
 using Atlas.Application.Tickets.Services;
 using Atlas.Application.Users.Services;
 using Atlas.Domain.Security;
@@ -52,12 +54,14 @@ builder.Services.AddScoped<ITicketService, TicketService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IOrganizationService, OrganizationService>();
 builder.Services.AddScoped<IUserService, UserService>();
+builder.Services.AddScoped<IProjectService, ProjectService>();
+builder.Services.AddScoped<ITeamService, TeamService>();
 
 builder.Services.AddCors(options =>
 {
     // Permissive policy for local development only (e.g. a future React dev
-    // server on http://localhost:5173, see Del 19). Tightened before any real
-    // deployment — see Del 6/17 for the Azure App Service configuration.
+    // server on http://localhost:5173, see Del 21). Tightened before any real
+    // deployment — see Del 8/19 for the Azure App Service configuration.
     options.AddPolicy("AllowLocalDev", policy =>
         policy.WithOrigins("http://localhost:5173", "http://localhost:3000")
               .AllowAnyHeader()
@@ -73,13 +77,13 @@ builder.Services.AddCors(options =>
 var jwtSettings = builder.Configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>()
     ?? throw new InvalidOperationException(
         "Configuration section 'Jwt' was not found. Set it in appsettings.Development.json " +
-        "(local signing key) or, in Azure, via Key Vault (Del 18).");
+        "(local signing key) or, in Azure, via Key Vault (Del 20).");
 
 if (string.IsNullOrWhiteSpace(jwtSettings.SigningKey) || Encoding.UTF8.GetByteCount(jwtSettings.SigningKey) < 32)
 {
     throw new InvalidOperationException(
         "Jwt:SigningKey is missing or too short (must be at least 32 bytes / 256 bits for HS256). " +
-        "Set a real value in appsettings.Development.json for local dev, or in Key Vault for Azure (Del 18).");
+        "Set a real value in appsettings.Development.json for local dev, or in Key Vault for Azure (Del 20).");
 }
 
 builder.Services
@@ -131,7 +135,7 @@ if (app.Environment.IsDevelopment())
 
     // Convenience only: applies pending EF Core migrations automatically on
     // startup so a fresh clone works with just `dotnet run`. Never do this
-    // against Azure SQL in production — deploy migrations explicitly (Del 6/16).
+    // against Azure SQL in production — deploy migrations explicitly (Del 8/18).
     using var scope = app.Services.CreateScope();
     var dbContext = scope.ServiceProvider.GetRequiredService<AtlasDbContext>();
     await dbContext.Database.MigrateAsync();
@@ -145,7 +149,7 @@ app.MapControllers();
 
 app.Run();
 
-// Exposed for WebApplicationFactory<Program> in integration tests (Del 14).
+// Exposed for WebApplicationFactory<Program> in integration tests (Del 16).
 public partial class Program
 {
 }

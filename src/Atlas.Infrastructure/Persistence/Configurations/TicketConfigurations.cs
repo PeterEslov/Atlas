@@ -24,7 +24,7 @@ public sealed class TicketConfiguration : IEntityTypeConfiguration<Ticket>
 
         // Composite index matching the dashboard's most common query shape:
         // WHERE Status = @status ORDER BY CreatedAtUtc DESC (see sql/001_InitialSchema.sql
-        // for the discussion of why this index exists — Del 7 revisits this).
+        // for the discussion of why this index exists — Del 9 revisits this).
         builder.HasIndex(t => new { t.Status, t.CreatedAtUtc }).HasDatabaseName("IX_Tickets_Status_CreatedAtUtc");
         builder.HasIndex(t => t.OrganizationId).HasDatabaseName("IX_Tickets_OrganizationId");
         builder.HasIndex(t => t.AssignedToUserId).HasDatabaseName("IX_Tickets_AssignedToUserId");

@@ -19,7 +19,7 @@ public static class DependencyInjection
         var connectionString = configuration.GetConnectionString("AtlasDb")
             ?? throw new InvalidOperationException(
                 "Connection string 'AtlasDb' was not found. Set it in appsettings.Development.json " +
-                "(local SQL Server / LocalDB) or, in Azure, via App Service connection strings / Key Vault (Del 18).");
+                "(local SQL Server / LocalDB) or, in Azure, via App Service connection strings / Key Vault (Del 20).");
 
         services.AddDbContext<AtlasDbContext>(options =>
             options.UseSqlServer(connectionString, sqlOptions =>
@@ -32,6 +32,8 @@ public static class DependencyInjection
         services.AddScoped<ITicketRepository, TicketRepository>();
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<IOrganizationRepository, OrganizationRepository>();
+        services.AddScoped<IProjectRepository, ProjectRepository>();
+        services.AddScoped<ITeamRepository, TeamRepository>();
 
         services.Configure<JwtSettings>(configuration.GetSection(JwtSettings.SectionName));
         services.AddSingleton<IPasswordHasher, Pbkdf2PasswordHasher>();
