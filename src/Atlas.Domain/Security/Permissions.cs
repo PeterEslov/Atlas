@@ -21,11 +21,15 @@ public static class Permissions
     public const string ProjectRead = "Project.Read";
     public const string ProjectManage = "Project.Manage";
 
+    public const string OrganizationRead = "Organization.Read";
+    public const string OrganizationManage = "Organization.Manage";
+
     /// <summary>Every permission that exists — used to grant Admin everything without hand-listing it twice.</summary>
     public static readonly IReadOnlyCollection<string> All =
     [
         TicketRead, TicketCreate, TicketUpdate, TicketAssign, TicketDelete,
         UserRead, UserManage,
-        ProjectRead, ProjectManage
+        ProjectRead, ProjectManage,
+        OrganizationRead, OrganizationManage
     ];
 }

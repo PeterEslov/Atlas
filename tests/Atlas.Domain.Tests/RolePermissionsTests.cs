@@ -38,14 +38,16 @@ public class RolePermissionsTests
     }
 
     [Fact]
-    public void Manager_CanDeleteTicketsAndManageProjects_ButCannotManageUsers()
+    public void Manager_CanDeleteTicketsManageProjectsAndManageUsers_ButCannotManageOrganizations()
     {
         var managerPermissions = RolePermissions.For(UserRole.Manager);
 
         Assert.Contains(Permissions.TicketDelete, managerPermissions);
         Assert.Contains(Permissions.ProjectManage, managerPermissions);
         Assert.Contains(Permissions.UserRead, managerPermissions);
-        Assert.DoesNotContain(Permissions.UserManage, managerPermissions);
+        Assert.Contains(Permissions.UserManage, managerPermissions);
+        Assert.Contains(Permissions.OrganizationRead, managerPermissions);
+        Assert.DoesNotContain(Permissions.OrganizationManage, managerPermissions);
     }
 
     [Theory]

@@ -4,7 +4,9 @@ using Atlas.Api.OpenApi;
 using Atlas.Api.Services;
 using Atlas.Application.Auth.Services;
 using Atlas.Application.Common.Interfaces;
+using Atlas.Application.Organizations.Services;
 using Atlas.Application.Tickets.Services;
+using Atlas.Application.Users.Services;
 using Atlas.Domain.Security;
 using Atlas.Infrastructure;
 using Atlas.Infrastructure.Persistence;
@@ -48,6 +50,8 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 builder.Services.AddScoped<ITicketService, TicketService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<IOrganizationService, OrganizationService>();
+builder.Services.AddScoped<IUserService, UserService>();
 
 builder.Services.AddCors(options =>
 {

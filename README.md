@@ -7,10 +7,10 @@ Clean Architecture, EF Core against Azure SQL, and a build-out path through
 authentication, messaging, caching, observability, containers and CI/CD.
 
 This repository currently covers **Phase 1 — Foundation** (solution
-structure, the full SQL data model, EF Core, the first real API) and the
-first slice of **Phase 2 — Real application**: local JWT authentication and
-permission-based authorization. Later phases are tracked in
-[Roadmap](#roadmap) below.
+structure, the full SQL data model, EF Core, the first real API) and two
+slices of **Phase 2 — Real application**: local JWT authentication with
+permission-based authorization (Del 5), and Organizations & Users management
+(Del 6). Later phases are tracked in [Roadmap](#roadmap) below.
 
 ## Architecture
 
@@ -23,6 +23,8 @@ flowchart TB
     subgraph API["Atlas.Api (ASP.NET Core)"]
         C[TicketsController]
         AC[AuthController]
+        OC[OrganizationsController]
+        UC[UsersController]
         MW[Exception-handling middleware]
         JWTMW["JWT bearer auth + policy-based authorization"]
     end
@@ -30,7 +32,9 @@ flowchart TB
     subgraph APP["Atlas.Application"]
         SVC[TicketService]
         AUTH[AuthService]
-        IF["Interfaces: ITicketRepository, IUserRepository, IUnitOfWork, ICurrentUserService"]
+        OSVC[OrganizationService]
+        USVC[UserService]
+        IF["Interfaces: ITicketRepository, IUserRepository, IOrganizationRepository, IUnitOfWork, ICurrentUserService"]
     end
 
     subgraph DOM["Atlas.Domain"]
@@ -43,6 +47,7 @@ flowchart TB
         DB[(AtlasDbContext / EF Core)]
         REPO[TicketRepository]
         UREPO[UserRepository]
+        OREPO[OrganizationRepository]
         JWT["JwtTokenGenerator / Pbkdf2PasswordHasher"]
     end
 
@@ -50,15 +55,22 @@ flowchart TB
 
     SW --> C --> SVC
     SW --> AC --> AUTH
+    SW --> OC --> OSVC
+    SW --> UC --> USVC
     JWTMW -.authorizes against.-> PERM
     AUTH --> JWT
     AUTH -.implements.-> IF
     SVC --> T
     SVC -.implements.-> IF
+    OSVC -.implements.-> IF
+    USVC -.implements.-> IF
     REPO -.implements.-> IF
     UREPO -.implements.-> IF
+    OREPO -.implements.-> IF
     SVC --> REPO --> DB --> SQL
     AUTH --> UREPO --> DB
+    OSVC --> OREPO --> DB
+    USVC --> UREPO --> DB
 ```
 
 Dependencies point inward, Clean-Architecture style:
@@ -98,12 +110,13 @@ Insights, Docker, GitHub Actions, Bicep, Key Vault, and a React frontend.
 ProjectAtlas.sln
 src/
   Atlas.Domain/            Entities, enums, domain exceptions, Permissions/RolePermissions
-  Atlas.Application/       DTOs, service interfaces, TicketService, AuthService
-  Atlas.Infrastructure/    EF Core DbContext, entity configurations, repositories,
-                           JwtTokenGenerator, Pbkdf2PasswordHasher
-  Atlas.Api/                Controllers (Tickets, Auth), Program.cs, appsettings
+  Atlas.Application/       DTOs, service interfaces — TicketService, AuthService,
+                           OrganizationService, UserService
+  Atlas.Infrastructure/    EF Core DbContext, entity configurations, repositories
+                           (Ticket, User, Organization), JwtTokenGenerator, Pbkdf2PasswordHasher
+  Atlas.Api/                Controllers (Tickets, Auth, Organizations, Users), Program.cs, appsettings
 tests/
-  Atlas.Domain.Tests/       xUnit tests for Ticket's business rules, RolePermissions, User
+  Atlas.Domain.Tests/       xUnit tests for Ticket's business rules, RolePermissions, User, Organization
 sql/
   001_InitialSchema.sql     Hand-written T-SQL reference (see note below)
   002_SeedData.sql          Optional demo data (Northstar IT / ACME AB / one ticket)
@@ -214,12 +227,25 @@ Swagger UI opens automatically at `https://localhost:5081/swagger` (or
 
 ### 5. Try it
 
-Every `/api/tickets` endpoint requires a bearer token (see
+Every endpoint except `POST /api/auth/register` and `POST /api/auth/login`
+requires a bearer token (see
 [Authentication & authorization](#authentication--authorization) below).
-Register a user, log in, then use the token:
+
+**Bootstrapping note — a real chicken-and-egg problem, not a bug:**
+`POST /api/auth/register` requires a real `organizationId` (it's a foreign
+key — see the `FK_Users_Organizations_OrganizationId` story this project ran
+into while testing Del 5), but creating an organization through the API
+(`POST /api/organizations`) requires `Organization.Manage`, which only an
+Admin has, and the only way to become an Admin is... to register. On a truly
+empty database there is no way around running `sql/002_SeedData.sql` (or
+inserting one row into `Organizations` by hand) once, just to get the very
+first real `organizationId` to register your first Admin against. After
+that, every organization from the second one onward can go through the API
+— no more raw SQL needed.
 
 ```bash
-# Register (Admin role gets every permission — handy for trying the API out)
+# Register (Admin role gets every permission — handy for trying the API out).
+# <org-guid> here must be a real Organizations.Id — see the bootstrapping note above.
 curl -X POST "https://localhost:5081/api/auth/register" -k \
      -H "Content-Type: application/json" \
      -d '{"fullName":"Ada Admin","email":"ada@northstar-it.example","password":"correct-horse-battery","organizationId":"<org-guid>","role":3}'
@@ -244,6 +270,24 @@ curl -X POST "https://localhost:5081/api/tickets" -k \
 curl -X POST "https://localhost:5081/api/tickets/<ticket-guid>/assign" -k \
      -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
      -d '{"userId":"<agent-guid>"}'
+
+# Create a second organization — from here on, no more raw SQL is needed (Del 6)
+curl -X POST "https://localhost:5081/api/organizations" -k \
+     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+     -d '{"name":"Contoso Ltd","type":1}'
+
+# List organizations
+curl "https://localhost:5081/api/organizations?isActive=true&page=1&pageSize=25" -k \
+     -H "Authorization: Bearer $TOKEN"
+
+# List users, e.g. everyone in one organization
+curl "https://localhost:5081/api/users?organizationId=<org-guid>&page=1&pageSize=25" -k \
+     -H "Authorization: Bearer $TOKEN"
+
+# Promote a user to Agent (role 1 = Agent — see UserRole)
+curl -X POST "https://localhost:5081/api/users/<user-guid>/role" -k \
+     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+     -d '{"role":1}'
 ```
 
 ### 6. Run the tests
@@ -280,6 +324,20 @@ endpoints in the API. Every other endpoint requires an
   the acting user's id straight from the token's `sub` claim, so controller
   actions no longer take an `actorUserId`/`createdByUserId` query parameter
   — that was a pre-auth stopgap from Phase 1 and is gone now.
+- **Organization.Manage is deliberately Admin-only** (Del 6) — creating,
+  renaming or deactivating an organization is a different kind of operation
+  from managing the people or projects *inside* one, since it touches the
+  tenant boundary itself. `User.Manage`, by contrast, is granted to both
+  Manager and Admin, on the theory that a Manager runs their own team
+  day-to-day. See the doc comment on `RolePermissions` for the full
+  reasoning, and `UsersController.ChangeRole`/`Deactivate` for a small but
+  important guard: nobody — not even an Admin — can change their own role or
+  deactivate their own account through these endpoints, so a mistake there
+  can't lock the caller out with no one else able to fix it.
+- Because Del 5's JWTs are plain and non-revocable, a role change made via
+  `POST /api/users/{id}/role` only takes effect the next time that user logs
+  in — the token they're currently holding still carries their old
+  `"permission"` claims until it expires or they sign in again.
 
 ## Business rules worth reading
 
@@ -301,8 +359,9 @@ database.
 ## Roadmap
 
 - [x] **Phase 1 — Foundation**: solution, SQL data model, EF Core, first API (this repo)
-- [~] **Phase 2 — Real application**: local JWT auth & permission policies done (Del 5);
-      users/projects endpoints and richer ticket workflows still to come
+- [~] **Phase 2 — Real application**: local JWT auth & permission policies (Del 5),
+      Organizations & Users management (Del 6) done; Projects/Teams endpoints and
+      richer ticket workflows still to come
 - [ ] **Phase 3 — Azure**: Azure SQL, App Service, Blob Storage, Key Vault
 - [ ] **Phase 4 — Enterprise**: Service Bus, background worker, Redis, audit logging
 - [ ] **Phase 5 — Quality**: broader test suite, Docker, structured logging, monitoring

@@ -20,7 +20,7 @@ public sealed class OrganizationConfiguration : IEntityTypeConfiguration<Organiz
 
         builder.HasIndex(o => o.Name).HasDatabaseName("IX_Organizations_Name");
 
-        builder.HasMany(o => o.Users).WithOne().HasForeignKey(u => u.OrganizationId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasMany(o => o.Users).WithOne(u => u.Organization).HasForeignKey(u => u.OrganizationId).OnDelete(DeleteBehavior.Restrict);
         builder.HasMany(o => o.Teams).WithOne().HasForeignKey(t => t.OrganizationId).OnDelete(DeleteBehavior.Restrict);
         builder.HasMany(o => o.Projects).WithOne().HasForeignKey(p => p.OrganizationId).OnDelete(DeleteBehavior.Restrict);
 

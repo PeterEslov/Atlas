@@ -22,6 +22,17 @@ public sealed class User : Entity
     public bool IsActive { get; private set; } = true;
     public string? PasswordHash { get; private set; }
 
+    /// <summary>
+    /// Navigation property, populated by EF Core only when explicitly requested
+    /// via .Include(...) — null otherwise. Added in Del 6 alongside the
+    /// Organizations &amp; Users management endpoints, mirroring the pattern
+    /// Ticket already uses for its own Organization reference; it required no
+    /// migration since the OrganizationId foreign key column already existed —
+    /// this just tells EF Core how to *load* the related row, it doesn't change
+    /// what's stored.
+    /// </summary>
+    public Organization? Organization { get; private set; }
+
     private readonly List<TeamMember> _teamMemberships = [];
     public IReadOnlyCollection<TeamMember> TeamMemberships => _teamMemberships.AsReadOnly();
 

@@ -41,15 +41,22 @@ is recorded in its history" can't be worked around by constructing a
 `ITicketRepository` is deliberately **not** a generic `IRepository<T>`.
 Tickets have query needs — filtering, paging, conditional eager-loading of
 Comments/History/Tags — that a one-size-fits-all abstraction only gets in
-the way of. As more aggregates gain their own controllers (Users,
-Organizations, Projects in Phase 2), they'll each get a purpose-built
-repository interface the same way, not a shared generic one.
+the way of. `IUserRepository` and `IOrganizationRepository` (Del 6) follow
+the same non-generic shape; `IProjectRepository`/`ITeamRepository` will too
+once Projects/Teams get their own controllers later in Phase 2.
 
-## Current known simplifications (by design, for Phase 1)
+## Current known simplifications (by design)
 
-- No authentication yet — `actorUserId`/`createdByUserId` are passed as
-  query parameters so every endpoint is fully testable end-to-end. Phase 2
-  replaces these with the JWT's `sub` claim via `ICurrentUserService`.
+- `actorUserId`/`createdByUserId` query parameters are gone (Del 5) — every
+  action now reads the caller's id from the JWT's `sub` claim via
+  `ICurrentUserService`. What's still missing: no token revocation or
+  refresh-token flow, so a deactivated user's existing JWT keeps working
+  until it naturally expires (`Jwt:ExpiryMinutes`, 60 by default today).
+- Self-registration (`POST /api/auth/register`) lets the caller pick *any*
+  role, including Admin, and any existing `organizationId` — a deliberate
+  dev/demo convenience (see the doc comment on `RegisterRequest`) that a
+  real deployment would replace with an invite flow or a
+  default-to-Customer policy before going anywhere near production.
 - `AuditLog` and `Notification` tables exist in the schema but nothing
   writes to them yet — they're wired up in Phase 4 (Service Bus consumers)
   and Phase 9 (the overdue-ticket background worker).
@@ -58,3 +65,5 @@ repository interface the same way, not a shared generic one.
 - Connection strings live in `appsettings.Development.json` / user-secrets
   for now. Phase 3/18 replaces this with Azure Key Vault +
   `DefaultAzureCredential` — no secrets in App Service configuration.
+  The JWT signing key in `appsettings.Development.json` has the same issue
+  and the same eventual fix.
