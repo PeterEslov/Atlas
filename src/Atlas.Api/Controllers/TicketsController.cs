@@ -131,4 +131,71 @@ public sealed class TicketsController : ControllerBase
         var comment = await _ticketService.AddCommentAsync(id, request, ActorUserId, cancellationToken);
         return CreatedAtAction(nameof(GetById), new { id }, comment);
     }
+
+    /// <summary>
+    /// POST /api/tickets/{id}/reopen — only valid from Closed or Cancelled;
+    /// see Ticket.Reopen for the guard. Gated by TicketUpdate, same as status
+    /// changes generally, since reopening is just another status transition.
+    /// </summary>
+    [HttpPost("{id:guid}/reopen")]
+    [Authorize(Policy = Permissions.TicketUpdate)]
+    [ProducesResponseType(typeof(TicketDetailDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<TicketDetailDto>> Reopen(Guid id, CancellationToken cancellationToken)
+    {
+        var updated = await _ticketService.ReopenAsync(id, ActorUserId, cancellationToken);
+        return Ok(updated);
+    }
+
+    /// <summary>
+    /// POST /api/tickets/{id}/tags — body is a tag name, not a tag id; see
+    /// AddTicketTagRequest's doc comment for why.
+    /// </summary>
+    [HttpPost("{id:guid}/tags")]
+    [Authorize(Policy = Permissions.TicketUpdate)]
+    [ProducesResponseType(typeof(TicketDetailDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<TicketDetailDto>> AddTag(
+        Guid id,
+        [FromBody] AddTicketTagRequest request,
+        CancellationToken cancellationToken)
+    {
+        var updated = await _ticketService.AddTagAsync(id, request, ActorUserId, cancellationToken);
+        return Ok(updated);
+    }
+
+    /// <summary>
+    /// POST /api/tickets/{id}/tags/remove — not a DELETE, because the tag name
+    /// lives in a body rather than the route (DELETE with a body is legal HTTP
+    /// but poorly supported by some clients/proxies, so this project avoids it).
+    /// </summary>
+    [HttpPost("{id:guid}/tags/remove")]
+    [Authorize(Policy = Permissions.TicketUpdate)]
+    [ProducesResponseType(typeof(TicketDetailDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<TicketDetailDto>> RemoveTag(
+        Guid id,
+        [FromBody] RemoveTicketTagRequest request,
+        CancellationToken cancellationToken)
+    {
+        var updated = await _ticketService.RemoveTagAsync(id, request, ActorUserId, cancellationToken);
+        return Ok(updated);
+    }
+
+    /// <summary>
+    /// DELETE /api/tickets/{id} — a genuine hard delete, gated by the narrow
+    /// Permissions.TicketDelete policy (Manager/Admin only). See
+    /// TicketService.DeleteAsync's doc comment for why this is distinct from
+    /// the soft-cancel path (POST .../status with Cancelled).
+    /// </summary>
+    [HttpDelete("{id:guid}")]
+    [Authorize(Policy = Permissions.TicketDelete)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
+    {
+        await _ticketService.DeleteAsync(id, cancellationToken);
+        return NoContent();
+    }
 }

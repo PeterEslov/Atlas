@@ -58,6 +58,11 @@ public sealed class TicketRepository : ITicketRepository
             filtered = filtered.Where(t => t.OrganizationId == query.OrganizationId);
         }
 
+        if (query.ProjectId is not null)
+        {
+            filtered = filtered.Where(t => t.ProjectId == query.ProjectId);
+        }
+
         if (query.OverdueOnly == true)
         {
             var now = DateTime.UtcNow;
@@ -98,5 +103,33 @@ public sealed class TicketRepository : ITicketRepository
         // Ticket was loaded from this same DbContext, so EF Core's change tracker
         // already knows about every mutation made through its domain methods.
         // Present for interface clarity and to support alternate implementations.
+    }
+
+    public async Task<Tag?> FindTagByNameAsync(Guid organizationId, string name, CancellationToken cancellationToken)
+    {
+        // Normalize the same way Tag.Create does, so "Billing", " billing " and
+        // "billing" all resolve to the same row instead of silently missing it.
+        var normalized = name.Trim().ToLowerInvariant();
+
+        return await _dbContext.Tags
+            .FirstOrDefaultAsync(t => t.OrganizationId == organizationId && t.Name == normalized, cancellationToken);
+    }
+
+    public async Task<Tag> GetOrCreateTagAsync(Guid organizationId, string name, CancellationToken cancellationToken)
+    {
+        var existing = await FindTagByNameAsync(organizationId, name, cancellationToken);
+        if (existing is not null)
+        {
+            return existing;
+        }
+
+        var tag = Tag.Create(organizationId, name);
+        await _dbContext.Tags.AddAsync(tag, cancellationToken);
+        return tag;
+    }
+
+    public void Remove(Ticket ticket)
+    {
+        _dbContext.Tickets.Remove(ticket);
     }
 }

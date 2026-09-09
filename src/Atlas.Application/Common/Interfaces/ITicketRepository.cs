@@ -24,4 +24,27 @@ public interface ITicketRepository
     /// repository) has something to override.
     /// </summary>
     void Update(Ticket ticket);
+
+    /// <summary>
+    /// Looks up an existing tag by its normalized name within an organization,
+    /// without creating anything. Used by RemoveTagAsync — removing "billing"
+    /// should never have the side effect of creating a "billing" tag that
+    /// didn't already exist.
+    /// </summary>
+    Task<Tag?> FindTagByNameAsync(Guid organizationId, string name, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Finds a tag by normalized name within an organization, creating it if it
+    /// doesn't exist yet. Backs AddTagAsync, so callers never have to do a
+    /// separate "create the tag first" step before tagging a ticket with it.
+    /// </summary>
+    Task<Tag> GetOrCreateTagAsync(Guid organizationId, string name, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Marks a ticket for hard deletion. EF Core's configured cascade delete
+    /// takes its Comments, History, Tags and Attachments with it — see the
+    /// doc comment on TicketService.DeleteAsync for why that's a deliberate,
+    /// narrow tradeoff rather than an oversight.
+    /// </summary>
+    void Remove(Ticket ticket);
 }

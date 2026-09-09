@@ -60,8 +60,19 @@ public sealed record ChangeTicketPriorityRequest(TicketPriority Priority, string
 public sealed record AddTicketCommentRequest(string Body, bool IsInternal);
 
 /// <summary>
+/// Request body for POST /api/tickets/{id}/tags. Takes a tag name, not a tag
+/// id — there's no separate "create a tag first, then reference its id" step
+/// for the caller. TicketService.AddTagAsync resolves this to a Tag row via
+/// get-or-create, scoped to the ticket's own organization.
+/// </summary>
+public sealed record AddTicketTagRequest(string Name);
+
+/// <summary>Request body for POST /api/tickets/{id}/tags/remove — same name-based shape as AddTicketTagRequest.</summary>
+public sealed record RemoveTicketTagRequest(string Name);
+
+/// <summary>
 /// Filter/sort/paging parameters for GET /api/tickets, mirroring
-/// GET /api/tickets?status=open&amp;priority=high&amp;assignedTo=...&amp;page=2&amp;pageSize=25
+/// GET /api/tickets?status=open&amp;priority=high&amp;assignedTo=...&amp;projectId=...&amp;page=2&amp;pageSize=25
 /// </summary>
 public sealed class TicketListQuery
 {
@@ -69,6 +80,7 @@ public sealed class TicketListQuery
     public TicketPriority? Priority { get; init; }
     public Guid? AssignedToUserId { get; init; }
     public Guid? OrganizationId { get; init; }
+    public Guid? ProjectId { get; init; }
     public bool? OverdueOnly { get; init; }
     public string? Search { get; init; }
 

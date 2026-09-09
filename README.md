@@ -289,6 +289,34 @@ curl -X POST "https://localhost:5081/api/tickets/<ticket-guid>/assign" -k \
      -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
      -d '{"userId":"<agent-guid>"}'
 
+# Tag it (get-or-create by name — no separate "create the tag" step), then remove the tag
+curl -X POST "https://localhost:5081/api/tickets/<ticket-guid>/tags" -k \
+     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+     -d '{"name":"login"}'
+
+curl -X POST "https://localhost:5081/api/tickets/<ticket-guid>/tags/remove" -k \
+     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+     -d '{"name":"login"}'
+
+# Close it, then reopen it
+curl -X POST "https://localhost:5081/api/tickets/<ticket-guid>/status" -k \
+     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+     -d '{"status":"Closed"}'
+
+curl -X POST "https://localhost:5081/api/tickets/<ticket-guid>/reopen" -k \
+     -H "Authorization: Bearer $TOKEN"
+
+# List tickets for one project only
+curl "https://localhost:5081/api/tickets?projectId=<project-guid>&page=1&pageSize=25" -k \
+     -H "Authorization: Bearer $TOKEN"
+
+# Permanently delete a ticket (Manager/Admin only — Permissions.TicketDelete).
+# This is a real hard delete: it cascade-deletes the ticket's comments, history,
+# tags and attachments too. For "we're done with this but want to keep the audit
+# trail", use POST .../status with {"status":"Cancelled"} instead.
+curl -X DELETE "https://localhost:5081/api/tickets/<ticket-guid>" -k \
+     -H "Authorization: Bearer $TOKEN"
+
 # Create a second organization — from here on, no more raw SQL is needed (Del 6)
 curl -X POST "https://localhost:5081/api/organizations" -k \
      -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
@@ -417,9 +445,10 @@ database.
 ## Roadmap
 
 - [x] **Phase 1 — Foundation**: solution, SQL data model, EF Core, first API (this repo)
-- [~] **Phase 2 — Real application**: local JWT auth & permission policies (Del 5),
+- [x] **Phase 2 — Real application**: local JWT auth & permission policies (Del 5),
       Organizations & Users management (Del 6), Projects & Teams management
-      (Del 7) done; richer ticket workflows still to come
+      and the richer ticket workflows (reopen, tag by name, filter by project,
+      real hard-delete) that closed out Del 7
 - [ ] **Phase 3 — Azure**: Azure SQL, App Service, Blob Storage, Key Vault
 - [ ] **Phase 4 — Enterprise**: Service Bus, background worker, Redis, audit logging
 - [ ] **Phase 5 — Quality**: broader test suite, Docker, structured logging, monitoring

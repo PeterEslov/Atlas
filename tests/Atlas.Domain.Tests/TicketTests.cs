@@ -106,6 +106,55 @@ public class TicketTests
     }
 
     [Fact]
+    public void AddTag_WithNewTagId_AddsIt()
+    {
+        var ticket = CreateTicket();
+        var tagId = Guid.NewGuid();
+
+        ticket.AddTag(tagId);
+
+        Assert.Single(ticket.Tags);
+        Assert.Equal(tagId, ticket.Tags.Single().TagId);
+    }
+
+    [Fact]
+    public void AddTag_SameTagTwice_IsANoOp()
+    {
+        // Unlike Project.AddMember/Team.AddMember, a duplicate tag doesn't throw
+        // — tagging something that's already tagged isn't a caller mistake worth
+        // surfacing, it's just idempotent.
+        var ticket = CreateTicket();
+        var tagId = Guid.NewGuid();
+        ticket.AddTag(tagId);
+
+        ticket.AddTag(tagId);
+
+        Assert.Single(ticket.Tags);
+    }
+
+    [Fact]
+    public void RemoveTag_ExistingTag_RemovesIt()
+    {
+        var ticket = CreateTicket();
+        var tagId = Guid.NewGuid();
+        ticket.AddTag(tagId);
+
+        ticket.RemoveTag(tagId);
+
+        Assert.Empty(ticket.Tags);
+    }
+
+    [Fact]
+    public void RemoveTag_UnknownTag_IsANoOp()
+    {
+        var ticket = CreateTicket();
+
+        var exception = Record.Exception(() => ticket.RemoveTag(Guid.NewGuid()));
+
+        Assert.Null(exception);
+    }
+
+    [Fact]
     public void IsOverdue_WhenDueDateInPastAndNotResolved_ReturnsTrue()
     {
         var ticket = Ticket.Create(

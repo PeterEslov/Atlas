@@ -103,6 +103,70 @@ public sealed class TicketService : ITicketService
         return new TicketCommentDto(comment.Id, comment.AuthorUserId, comment.Body, comment.IsInternal, comment.CreatedAtUtc);
     }
 
+    public async Task<TicketDetailDto> ReopenAsync(Guid ticketId, Guid actorUserId, CancellationToken cancellationToken)
+    {
+        var ticket = await GetTicketOrThrowAsync(ticketId, cancellationToken);
+
+        ticket.Reopen(actorUserId);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        _logger.LogInformation("Ticket {TicketId} reopened by {ActorUserId}", ticketId, actorUserId);
+        return ToDetailDto(ticket);
+    }
+
+    public async Task<TicketDetailDto> AddTagAsync(Guid ticketId, AddTicketTagRequest request, Guid actorUserId, CancellationToken cancellationToken)
+    {
+        var ticket = await GetTicketOrThrowAsync(ticketId, cancellationToken);
+
+        // Get-or-create means the caller never has to create the Tag row first —
+        // tagging a ticket with a name that doesn't exist yet just creates it,
+        // scoped to the ticket's own organization.
+        var tag = await _ticketRepository.GetOrCreateTagAsync(ticket.OrganizationId, request.Name, cancellationToken);
+        ticket.AddTag(tag.Id);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        _logger.LogInformation("Tag '{TagName}' added to ticket {TicketId} by {ActorUserId}", tag.Name, ticketId, actorUserId);
+        return ToDetailDto(ticket);
+    }
+
+    public async Task<TicketDetailDto> RemoveTagAsync(Guid ticketId, RemoveTicketTagRequest request, Guid actorUserId, CancellationToken cancellationToken)
+    {
+        var ticket = await GetTicketOrThrowAsync(ticketId, cancellationToken);
+
+        // Unlike AddTagAsync, this deliberately does NOT get-or-create — removing
+        // a tag that was never applied (or was already removed) is a no-op, not
+        // a reason to create the tag row just to immediately not-use it.
+        var tag = await _ticketRepository.FindTagByNameAsync(ticket.OrganizationId, request.Name, cancellationToken);
+        if (tag is not null)
+        {
+            ticket.RemoveTag(tag.Id);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+
+        _logger.LogInformation("Tag '{TagName}' removed from ticket {TicketId} by {ActorUserId}", request.Name, ticketId, actorUserId);
+        return ToDetailDto(ticket);
+    }
+
+    /// <summary>
+    /// Hard-deletes a ticket. This is deliberately different from soft-cancelling
+    /// one via ChangeStatusAsync(Cancelled): a cancelled ticket still exists and
+    /// keeps its full TicketHistory audit trail, while this permanently removes
+    /// the row and — via the Cascade delete configured in TicketConfigurations —
+    /// its Comments, History, Tags and Attachments along with it. That's a real
+    /// tradeoff (the audit trail is gone, not just marked closed), which is why
+    /// it sits behind its own narrow Permissions.TicketDelete policy rather than
+    /// the general TicketUpdate permission that covers status changes.
+    /// </summary>
+    public async Task DeleteAsync(Guid ticketId, CancellationToken cancellationToken)
+    {
+        var ticket = await GetTicketOrThrowAsync(ticketId, cancellationToken);
+
+        _ticketRepository.Remove(ticket);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        _logger.LogInformation("Ticket {TicketId} permanently deleted", ticketId);
+    }
+
     private async Task<Ticket> GetTicketOrThrowAsync(Guid ticketId, CancellationToken cancellationToken)
     {
         var ticket = await _ticketRepository.GetByIdAsync(ticketId, includeDetails: true, cancellationToken);
@@ -130,6 +194,7 @@ public sealed class TicketService : ITicketService
             Priority = query.Priority,
             AssignedToUserId = query.AssignedToUserId,
             OrganizationId = query.OrganizationId,
+            ProjectId = query.ProjectId,
             OverdueOnly = query.OverdueOnly,
             Search = query.Search,
             Page = page,

@@ -50,6 +50,33 @@ row (which is what `OrganizationRepository.GetChildCountsAsync` does — fine
 for a single organization, but a textbook N+1 if repeated once per row of a
 25-row page).
 
+`ITicketRepository.GetOrCreateTagAsync`/`FindTagByNameAsync` are the other
+notable repository-level pattern: `TicketsController`'s tag endpoints take a
+tag *name* in the request body, not a tag id, so there's no separate
+"create the tag first" step for API callers. Adding a tag get-or-creates the
+`Tag` row (normalized via `Tag.Create`'s `.Trim().ToLowerInvariant()`, so
+`"Billing"` and `"billing"` resolve to the same row); removing one only
+looks the row up — it deliberately does *not* create a tag just to
+immediately not-apply it.
+
+## Ticket workflows (closed out alongside Del 7)
+
+`Ticket.Reopen`, `Ticket.AddTag` and `Ticket.RemoveTag` existed as domain
+methods before they had endpoints — they were written when `Ticket` itself
+was built, but wiring them through `ITicketService`/`TicketsController` was
+deferred. That gap is what the roadmap called "richer ticket workflows" and
+is why Fas 2 stayed yellow after Del 7's Project/Team work was otherwise
+done. It's now closed: `POST /api/tickets/{id}/reopen`,
+`POST /api/tickets/{id}/tags`, `POST /api/tickets/{id}/tags/remove`, a
+`projectId` filter on `GET /api/tickets`, and a real
+`DELETE /api/tickets/{id}` (the endpoint `Permissions.TicketDelete` was
+defined and granted for, but previously had nothing behind it) all exist
+now. `DELETE /api/tickets/{id}` is a genuine hard delete — cascade-deleting
+Comments/History/Tags/Attachments with it — which is a real tradeoff
+against the soft-cancel path (`POST .../status` with `Cancelled`, which
+keeps the full audit trail); see the doc comment on
+`TicketService.DeleteAsync` for the reasoning.
+
 ## Current known simplifications (by design)
 
 - `actorUserId`/`createdByUserId` query parameters are gone (Del 5) — every
@@ -67,13 +94,6 @@ for a single organization, but a textbook N+1 if repeated once per row of a
   background worker and Del 12's Service Bus consumers).
 - `Attachment.BlobName` is a plain string column; there is no upload
   endpoint yet. Phase 3 (Del 10) adds Azure Blob Storage and the upload flow.
-- `Ticket` still has no way to remove a tag, reopen itself via the API (the
-  domain method `Reopen` exists, it's just not wired to a controller yet), or
-  be filtered by `ProjectId` — this is the "richer ticket workflows" scope
-  mentioned in the roadmap, separate from Del 7's Project/Team scope.
-  `Permissions.TicketDelete` is defined and granted to Manager/Admin but has
-  no matching endpoint at all yet — a dangling permission, not a bug, but
-  worth knowing about if you go looking for where it's enforced.
 - Connection strings live in `appsettings.Development.json` / user-secrets
   for now. Phase 3 (Del 20) replaces this with Azure Key Vault +
   `DefaultAzureCredential` — no secrets in App Service configuration.
