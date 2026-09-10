@@ -124,6 +124,17 @@ separators. Del 9's `ConnectionStrings:AtlasDb` will follow the same Key
 Vault pattern once it exists. See `docs/AZURE_DEPLOYMENT.md` section 3 for
 the exact commands (managed identity, role assignment, secret creation).
 
+**Confirmed working end-to-end against the live subscription on 2026-09-10**:
+Key Vault role assignment, pipeline run (build, test, `AzureWebApp@1` ZIP
+deploy), and `GET /health` returning `Healthy` from
+`https://app-projectatlas-dev-sc.azurewebsites.net/health`. The one hiccup
+along the way was environmental, not a design flaw: Git Bash (MSYS) on
+Windows silently rewrites a leading-slash argument like
+`--scope "$VAULT_ID"` into a mangled Windows-style path before Azure CLI
+ever sees it, producing a `(MissingSubscription)` error that has nothing to
+do with the subscription itself — `export MSYS_NO_PATHCONV=1` fixes it; see
+`docs/AZURE_DEPLOYMENT.md` section 0 for the full explanation.
+
 Docker was deliberately **not** introduced here even though App Service
 supports container deployment — Del 17 ("Docker — containerisering av
 API:et", Phase 5) owns that scope. Del 8 deploys the plain `dotnet publish`

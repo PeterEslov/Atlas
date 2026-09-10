@@ -464,13 +464,13 @@ database.
       Organizations & Users management (Del 6), Projects & Teams management
       and the richer ticket workflows (reopen, tag by name, filter by project,
       real hard-delete) that closed out Del 7
-- [~] **Phase 3 — Azure**: App Service + Azure Pipelines CI/CD pipeline
-      (Azure DevOps), plus the JWT signing key in Key Vault (Del 8, pulled
-      forward from Del 20 — see `docs/AZURE_DEPLOYMENT.md`) built; Key Vault
-      role assignment confirmed working against the live subscription,
-      pipeline/deploy steps in progress. Azure SQL (Del 9) and Blob Storage
-      (Del 10) still to come; Del 20 is now mostly just "generalize the Key
-      Vault setup"
+- [~] **Phase 3 — Azure**: Del 8 confirmed working end-to-end against the
+      live subscription — App Service + Azure Pipelines CI/CD pipeline
+      (Azure DevOps), JWT signing key in Key Vault (pulled forward from
+      Del 20 — see `docs/AZURE_DEPLOYMENT.md`), `/health` responding
+      `Healthy` at `https://app-projectatlas-dev-sc.azurewebsites.net/health`
+      (2026-09-10). Azure SQL (Del 9) and Blob Storage (Del 10) still to
+      come; Del 20 is now mostly just "generalize the Key Vault setup"
 - [ ] **Phase 4 — Enterprise**: Service Bus, background worker, Redis, audit logging
 - [ ] **Phase 5 — Quality**: broader test suite, Docker, structured logging, monitoring
 - [ ] **Phase 6 — DevOps**: Bicep (Infrastructure as Code) — CI/CD itself
