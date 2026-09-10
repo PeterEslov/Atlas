@@ -293,7 +293,7 @@ och sätt den till exakt det namn du valde:
 
 ```yaml
 variables:
-  azureServiceConnection: 'sc-projectatlas-dev-sc'   # namnet från steg 3
+  azureServiceConnection: 'project-atlas-connectionname'   # namnet från steg 3
   webAppName: 'app-projectatlas-dev-sc'
 ```
 
