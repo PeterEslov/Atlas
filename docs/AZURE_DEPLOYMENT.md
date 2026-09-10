@@ -35,62 +35,75 @@ du bygger nu — det är precis vad man förväntar sig av en driftsättning som
 ## 1. Resursgrupp, App Service-plan och Web App
 
 Region: **Sweden Central**, billigaste nivån (enligt din instruktion).
+Resursnamnen följer din egen standard (`<typ>-<projekt>-<miljö>-<region>`) —
+sätt dem en gång här som variabler, så byter du bara på en rad om du vill
+ändra något, istället för att jaga upp varje förekomst längre ner i
+dokumentet.
 
 ```bash
-az group create --name rg-projectatlas --location swedencentral
+RG=rg-projectatlas-dev-sc
+PLAN=plan-projectatlas-dev-sc
+LOCATION=swedencentral
+
+# Webbappens namn är det enda som INTE bara behöver vara unikt inom din
+# prenumeration — det blir en del av <namn>.azurewebsites.net, en DNS-zon
+# alla Azure-kunder delar, så det måste vara globalt unikt i hela Azure.
+# app-projectatlas-dev-sc följer din namnstandard och verkar ledigt (ingen
+# DNS-post hittad när jag kollade) — men "ledigt nu" är inte samma sak som
+# "ledigt när du kör az webapp create", så ha ett par reserver redo:
+#   app-projectatlas-dev-sc     (försök först)
+#   app-atlas-northstar-dev-sc  (om upptaget — "Northstar" från projektets
+#                                fiktiva bolag, Northstar IT)
+#   app-projectatlas-dev-sc-01  (enklaste sättet att göra ett namn unikt
+#                                om båda ovan är tagna)
+WEBAPP_NAME=app-projectatlas-dev-sc
+
+az group create --name "$RG" --location "$LOCATION"
 
 # F1 (gratis) finns inte i alla region/OS-kombinationer — testa F1 först,
 # fall tillbaka till B1 (billig, inte gratis) om Azure svarar att F1 inte
 # finns för Linux i swedencentral just nu.
 az appservice plan create \
-  --name plan-projectatlas \
-  --resource-group rg-projectatlas \
-  --location swedencentral \
+  --name "$PLAN" \
+  --resource-group "$RG" \
+  --location "$LOCATION" \
   --sku F1 \
   --is-linux
 
-# Webbappens namn måste vara globalt unikt inom hela Azure (det blir en del
-# av URL:en <namn>.azurewebsites.net) — välj något du inte redan sett upptaget.
 az webapp list-runtimes --os linux --output table | grep -i dotnet
 # ^ kör den här för att se den exakta runtime-identifieraren för .NET 10 —
 # formatet har växlat mellan Azure CLI-versioner (t.ex. "DOTNETCORE:8.0"),
 # så bekräfta strängen istället för att lita på exemplet nedan.
 
 az webapp create \
-  --name <ditt-unika-app-namn> \
-  --resource-group rg-projectatlas \
-  --plan plan-projectatlas \
+  --name "$WEBAPP_NAME" \
+  --resource-group "$RG" \
+  --plan "$PLAN" \
   --runtime "DOTNETCORE:10.0"
 ```
 
 ## 2. Application settings (bootstrap-konfiguration)
 
-Detta är *inte* Del 20 (Key Vault) — det är samma mönster som
-`appsettings.Development.json` redan använder lokalt, bara flyttat till
-App Service Configuration istället för en fil i repot. Värdena blir
-miljövariabler för processen; ASP.NET Core:s config-system mappar
-dubbla understreck till kolon (`Jwt__SigningKey` → config-nyckeln
-`Jwt:SigningKey`), vilket är varför `Jwt.cs`/`Program.cs` aldrig behöver
-veta att värdena kom från Azure och inte från en JSON-fil.
+Samma mönster som `appsettings.Development.json` redan använder lokalt,
+bara flyttat till App Service Configuration istället för en fil i repot.
+Värdena blir miljövariabler för processen; ASP.NET Core:s config-system
+mappar dubbla understreck till kolon (`Jwt__Issuer` → config-nyckeln
+`Jwt:Issuer`). Det här är för de icke-hemliga inställningarna — själva
+signeringsnyckeln flyttar till Key Vault i nästa steg, inte hit.
+
+Ny terminal sedan steg 1? `$RG`/`$WEBAPP_NAME` är då tomma — sätt om dem
+(`RG=rg-projectatlas-dev-sc`, `WEBAPP_NAME=<namnet du faktiskt fick>`)
+innan du kör nedanstående.
 
 ```bash
 az webapp config appsettings set \
-  --name <ditt-app-namn> \
-  --resource-group rg-projectatlas \
+  --name "$WEBAPP_NAME" \
+  --resource-group "$RG" \
   --settings \
     Jwt__Issuer=ProjectAtlas \
     Jwt__Audience=ProjectAtlas.Api \
     Jwt__ExpiryMinutes=60 \
     EnableSwaggerUi=true
-
-# Signeringsnyckeln sätter du separat, med ett eget genererat värde —
-# klistra aldrig in den riktiga nyckeln i ett delat dokument. Minst 32 bytes
-# (256 bitar), t.ex.:
-openssl rand -base64 48
-az webapp config appsettings set \
-  --name <ditt-app-namn> \
-  --resource-group rg-projectatlas \
-  --settings Jwt__SigningKey="<klistra in värdet från raden ovan>"
 ```
 
 `EnableSwaggerUi=true` här är ett medvetet demo-val för ett portfolioprojekt
@@ -98,20 +111,99 @@ az webapp config appsettings set \
 inte kopplat till `ASPNETCORE_ENVIRONMENT`. Sätt den till `false` (eller ta
 bort den, samma sak som default) om du vill stänga av den igen.
 
-## 3. Health check
+## 3. Key Vault: JWT-signeringsnyckeln (draget in från Del 20)
+
+Del 20 i roadmapen är egentligen "flytta hemligheter till Key Vault" —
+men du har redan ett Key Vault i prenumerationen, så det finns ingen
+anledning att först bygga den osäkra mellanversionen (nyckeln som en vanlig
+Application Setting, i klartext) bara för att riva upp den igen när Del 20
+formellt kommer. Nyckeln går till valvet direkt här i Del 8 istället; Del 9:s
+Azure SQL-connection string ansluter sig till samma mönster när den landar
+— se `Program.cs`s kommentar ovanför Key Vault-blocket.
+
+Lägg först till de två paketen som låter appen läsa från Key Vault. Jag har
+medvetet inte skrivit in ett specifikt versionsnummer i `.csproj`-filen —
+den här sessionen har ingen pålitlig internetåtkomst mot NuGet just nu för
+att verifiera vilken version som faktiskt är aktuell, och att gissa fel
+version är värre än att låta `dotnet add package` slå upp den självt:
+
+```bash
+cd src/Atlas.Api
+dotnet add package Azure.Identity
+dotnet add package Azure.Extensions.AspNetCore.Configuration.Secrets
+cd ../..
+```
+
+Sedan själva Azure-sidan — byt `<namnet på ditt befintliga Key Vault>` mot
+det riktiga namnet:
+
+```bash
+# Ny terminal sedan steg 1? Sätt om RG/WEBAPP_NAME också.
+KEYVAULT_NAME=mykeyvaultpeter
+
+# 1) System-assigned managed identity på App Service — det är så appen
+#    autentiserar mot valvet. Ingen nyckel eller connection string behövs
+#    för att komma åt hemligheterna; identiteten ÄR autentiseringen.
+az webapp identity assign --name "$WEBAPP_NAME" --resource-group "$RG"
+PRINCIPAL_ID=$(az webapp identity show --name "$WEBAPP_NAME" --resource-group "$RG" --query principalId -o tsv)
+
+# 2) Läsrättighet för den identiteten. Vilket kommando som gäller beror på
+#    vilken auktoriseringsmodell ditt befintliga valv använder — kolla:
+az keyvault show --name "$KEYVAULT_NAME" --query properties.enableRbacAuthorization -o tsv
+```
+
+```bash
+# "true" -> RBAC-modellen:
+az role assignment create \
+  --role "Key Vault Secrets User" \
+  --assignee "$PRINCIPAL_ID" \
+  --scope "$(az keyvault show --name "$KEYVAULT_NAME" --query id -o tsv)"
+```
+
+```bash
+# "false" -> klassiska access policies:
+az keyvault set-policy \
+  --name "$KEYVAULT_NAME" \
+  --object-id "$PRINCIPAL_ID" \
+  --secret-permissions get list
+```
+
+```bash
+# 3) Själva hemligheten. Notera -- (dubbelt bindestreck), INTE __ (dubbelt
+#    understreck) som för Application Settings — Key Vault-namn får bara
+#    innehålla bokstäver, siffror och bindestreck; understreck är inte
+#    tillåtna alls i ett Key Vault-secretnamn. Config-biblioteket vet att
+#    göra om -- till : (Jwt--SigningKey -> config-nyckeln Jwt:SigningKey),
+#    på exakt samma sätt som __ görs om till : för miljövariabler.
+az keyvault secret set \
+  --vault-name "$KEYVAULT_NAME" \
+  --name "Jwt--SigningKey" \
+  --value "$(openssl rand -base64 48)"
+
+# 4) Säg åt appen vilket valv den ska fråga. Det är inte hemligt i sig
+#    (bara ett namn) så det är en vanlig Application Setting, precis som
+#    Jwt__Issuer ovan — inte en Key Vault-hemlighet.
+az webapp config appsettings set \
+  --name "$WEBAPP_NAME" \
+  --resource-group "$RG" \
+  --settings KeyVault__Name="$KEYVAULT_NAME"
+```
+
+## 4. Health check
 
 Portalen: din Web App → **Monitoring → Health check** → aktivera, sökväg
 `/health`. Det pekar mot `MapHealthChecks("/health")` i `Program.cs`, som
 medvetet inte är beroende av databasen (se kommentaren där för varför) —
-så det här fungerar redan efter steg 1–2, innan Del 9 finns.
+så det här fungerar redan efter steg 1–3, innan Del 9 finns.
 
-## 4. GitHub Actions: lösenordsfri inloggning (OIDC)
+## 5. GitHub Actions: lösenordsfri inloggning (OIDC)
 
 Ingen klienthemlighet lagras i GitHub alls — workflowen (`.github/workflows/deploy.yml`)
 växlar sin egen GitHub-utfärdade OIDC-token mot en Azure AD-token, begränsat
 till just det här repot och just `main`-branchen.
 
 ```bash
+# Ny terminal sedan steg 1? Sätt om RG=rg-projectatlas-dev-sc också.
 SUBSCRIPTION_ID=$(az account show --query id -o tsv)
 TENANT_ID=$(az account show --query tenantId -o tsv)
 
@@ -124,7 +216,7 @@ az ad sp create --id "$APP_ID"
 az role assignment create \
   --assignee "$APP_ID" \
   --role Contributor \
-  --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/rg-projectatlas"
+  --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RG"
 
 # Byt <ditt-github-anvandarnamn>/<repo-namn> mot ditt faktiska repo.
 az ad app federated-credential create \
@@ -150,17 +242,17 @@ variables → Actions → Variables:
 - `AZURE_SUBSCRIPTION_ID`
 - `AZURE_WEBAPP_NAME` — samma namn du valde i steg 1
 
-## 5. Verifiera
+## 6. Verifiera
 
 Pusha till `main` (eller kör workflowen manuellt via Actions-fliken →
 "Build, test and deploy to Azure" → Run workflow), följ körningen i
 GitHub Actions-fliken, och kontrollera sedan:
 
 ```bash
-curl https://<ditt-app-namn>.azurewebsites.net/health
+curl "https://$WEBAPP_NAME.azurewebsites.net/health"
 # förväntat: "Healthy" (200 OK) — fungerar oavsett databas
 
-curl https://<ditt-app-namn>.azurewebsites.net/openapi/v1.json
+curl "https://$WEBAPP_NAME.azurewebsites.net/openapi/v1.json"
 # förväntat: ett OpenAPI-dokument, om EnableSwaggerUi=true — annars 404
 ```
 
@@ -169,12 +261,11 @@ Att `/api/auth/login` eller `/api/tickets` svarar med ett databasfel just nu
 
 ## Nästa: Del 9 — Azure SQL
 
-Byt `ConnectionStrings:AtlasDb` (samma `__`-mönster som `Jwt__SigningKey`
-ovan: `ConnectionStrings__AtlasDb`, *eller* — bekvämare — lägg den som en
-riktig **Connection string** av typen "SQL Azure" i portalen, vilket App
-Service automatiskt exponerar som `ConnectionStrings:AtlasDb` utan
-dubbla-understreck-tricket) till en riktig Azure SQL-instans, kör
-migrationerna mot den (`dotnet ef database update` — inte
-auto-migrate-on-startup, som medvetet stannar kvar som en
-`IsDevelopment()`-only-genväg, se `Program.cs`), och hela API:et blir
-funktionellt i molnet.
+Sätt `ConnectionStrings:AtlasDb` till en riktig Azure SQL-instans — och nu
+när valvet redan är kopplat in (avsnitt 3), gå direkt dit i stället för
+vägen via en vanlig Application Setting: samma `az keyvault secret set`-
+mönster som `Jwt--SigningKey`, fast med secret-namnet
+`ConnectionStrings--AtlasDb`. Kör migrationerna mot den nya databasen
+(`dotnet ef database update` — inte auto-migrate-on-startup, som medvetet
+stannar kvar som en `IsDevelopment()`-only-genväg, se `Program.cs`), och
+hela API:et blir funktionellt i molnet.

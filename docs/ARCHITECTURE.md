@@ -105,6 +105,25 @@ Three small but easy-to-miss decisions worth recording, all in `Program.cs`:
   database to check. `AddDbContextCheck<AtlasDbContext>()` is the natural
   follow-up once there's something real behind it.
 
+**Key Vault was pulled forward from Del 20 into Del 8** for one practical
+reason: Peter's subscription already has one. Building the "insecure
+intermediate" version — the JWT signing key as a plain-text App Service
+Application Setting — only to redo it as a Key Vault secret once Del 20
+formally arrived would have been pure throwaway work, so `Program.cs` reads
+`KeyVault:Name` and, if set, layers `AddAzureKeyVault(..., new
+DefaultAzureCredential())` onto configuration before anything else is bound.
+Two details worth knowing if you're extending this: App Service authenticates
+to the vault via a **system-assigned managed identity**, not a stored
+credential of any kind — there's no chicken-and-egg secret needed to reach
+the secrets. And Key Vault secret names can't contain underscores (only
+letters, digits and hyphens), so the naming convention there is `--`
+(`Jwt--SigningKey`), not the `__` used for plain environment-variable-backed
+settings (`Jwt__Issuer`) — the configuration provider maps both to the same
+kind of nested key (`Jwt:SigningKey`, `Jwt:Issuer`), just via two different
+separators. Del 9's `ConnectionStrings:AtlasDb` will follow the same Key
+Vault pattern once it exists. See `docs/AZURE_DEPLOYMENT.md` section 3 for
+the exact commands (managed identity, role assignment, secret creation).
+
 Docker was deliberately **not** introduced here even though App Service
 supports container deployment — Del 17 ("Docker — containerisering av
 API:et", Phase 5) owns that scope. Del 8 deploys the plain `dotnet publish`
@@ -142,9 +161,12 @@ on its own. See `docs/AZURE_DEPLOYMENT.md` for the exact `az` commands.
   background worker and Del 12's Service Bus consumers).
 - `Attachment.BlobName` is a plain string column; there is no upload
   endpoint yet. Phase 3 (Del 10) adds Azure Blob Storage and the upload flow.
-- Connection strings and the JWT signing key live in
-  `appsettings.Development.json` / user-secrets locally, and as plain Azure
-  App Service Application Settings once deployed (Del 8) — a step up from a
-  committed file, but still a secret sitting in App Service configuration
-  rather than a vault. Phase 3 (Del 20) replaces that with Azure Key Vault +
-  `DefaultAzureCredential`.
+- The JWT signing key lives in `appsettings.Development.json` / user-secrets
+  locally, and as an Azure Key Vault secret once deployed (Del 8 — pulled
+  forward from Del 20, see above, since a vault was already available).
+  The Azure SQL connection string (Del 9) doesn't exist yet at all; once it
+  does, it follows the same Key Vault pattern rather than repeating Del 8's
+  original plain-App-Service-setting approach. Phase 3 (Del 20) is now
+  mostly about generalizing this — e.g. moving it off a pre-existing vault
+  and onto one provisioned as part of the project's own IaC — rather than
+  introducing Key Vault from scratch.

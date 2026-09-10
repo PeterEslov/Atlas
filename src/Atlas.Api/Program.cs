@@ -13,12 +13,37 @@ using Atlas.Domain.Security;
 using Atlas.Infrastructure;
 using Atlas.Infrastructure.Persistence;
 using Atlas.Infrastructure.Security;
+using Azure.Identity;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// ---- Key Vault (pulled forward from Del 20) --------------------------------
+//
+// Originally planned as its own later Del, but Peter's subscription already
+// has a Key Vault sitting there unused — building the "plain-text App Service
+// setting" version of the JWT signing key first, only to redo it as a Key
+// Vault secret once Del 20 arrived, would just be throwaway work. So the
+// signing key moves to Key Vault as part of Del 8 instead; the Azure SQL
+// connection string will join it the same way once Del 9 exists. See
+// docs/AZURE_DEPLOYMENT.md for how the secret gets there and how App Service
+// authenticates to read it (a system-assigned managed identity — no
+// connection string or key needed for Key Vault access itself).
+//
+// KeyVault:Name is only ever set as an Azure Application Setting (see the
+// deployment doc) — never in an appsettings.*.json file — so this block is a
+// no-op for local `dotnet run`, which keeps using the plain-text signing key
+// in appsettings.Development.json exactly as before.
+var keyVaultName = builder.Configuration["KeyVault:Name"];
+if (!string.IsNullOrWhiteSpace(keyVaultName))
+{
+    builder.Configuration.AddAzureKeyVault(
+        new Uri($"https://{keyVaultName}.vault.azure.net/"),
+        new DefaultAzureCredential());
+}
 
 // ---- Services -------------------------------------------------------------
 
@@ -104,13 +129,14 @@ builder.Services.AddCors(options =>
 var jwtSettings = builder.Configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>()
     ?? throw new InvalidOperationException(
         "Configuration section 'Jwt' was not found. Set it in appsettings.Development.json " +
-        "(local signing key) or, in Azure, via Key Vault (Del 20).");
+        "(local signing key) or, in Azure, as a Key Vault secret (see the Key Vault block above).");
 
 if (string.IsNullOrWhiteSpace(jwtSettings.SigningKey) || Encoding.UTF8.GetByteCount(jwtSettings.SigningKey) < 32)
 {
     throw new InvalidOperationException(
         "Jwt:SigningKey is missing or too short (must be at least 32 bytes / 256 bits for HS256). " +
-        "Set a real value in appsettings.Development.json for local dev, or in Key Vault for Azure (Del 20).");
+        "Set a real value in appsettings.Development.json for local dev, or as the Key Vault secret " +
+        "Jwt--SigningKey for Azure.");
 }
 
 builder.Services

@@ -395,8 +395,9 @@ endpoints in the API. Every other endpoint requires an
 - **Tokens** are HS256-signed JWTs issued by `JwtTokenGenerator`
   (`Atlas.Infrastructure/Security`), valid for `Jwt:ExpiryMinutes` (60 by
   default). The signing key lives in `appsettings.Development.json` for
-  local dev only — see the comment on `JwtSettings` for why that's fine here
-  but not in Azure (Del 20 moves it to Key Vault).
+  local dev only; in Azure it's an Azure Key Vault secret instead (pulled
+  forward into Del 8 — see `docs/AZURE_DEPLOYMENT.md` §3 and
+  `docs/ARCHITECTURE.md`).
 - **Passwords** are hashed with PBKDF2-HMAC-SHA256, 100,000 iterations, via
   `Pbkdf2PasswordHasher` — no external hashing package, just the BCL's
   `System.Security.Cryptography`.
@@ -460,10 +461,11 @@ database.
       Organizations & Users management (Del 6), Projects & Teams management
       and the richer ticket workflows (reopen, tag by name, filter by project,
       real hard-delete) that closed out Del 7
-- [~] **Phase 3 — Azure**: App Service + GitHub Actions CI/CD pipeline (Del 8)
-      built — see `docs/AZURE_DEPLOYMENT.md`; not yet run against a live
-      subscription. Azure SQL (Del 9), Blob Storage (Del 10) and Key Vault
-      (Del 20) still to come
+- [~] **Phase 3 — Azure**: App Service + GitHub Actions CI/CD pipeline, plus
+      the JWT signing key in Key Vault (Del 8, pulled forward from Del 20 —
+      see `docs/AZURE_DEPLOYMENT.md`) built; not yet run against a live
+      subscription. Azure SQL (Del 9) and Blob Storage (Del 10) still to
+      come; Del 20 is now mostly just "generalize the Key Vault setup"
 - [ ] **Phase 4 — Enterprise**: Service Bus, background worker, Redis, audit logging
 - [ ] **Phase 5 — Quality**: broader test suite, Docker, structured logging, monitoring
 - [ ] **Phase 6 — DevOps**: GitHub Actions CI/CD, Bicep (Infrastructure as Code)
