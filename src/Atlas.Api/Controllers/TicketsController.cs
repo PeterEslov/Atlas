@@ -5,6 +5,7 @@ using Atlas.Application.Tickets.Dtos;
 using Atlas.Application.Tickets.Services;
 using Atlas.Domain.Security;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Atlas.Api.Controllers;
@@ -181,6 +182,47 @@ public sealed class TicketsController : ControllerBase
     {
         var updated = await _ticketService.RemoveTagAsync(id, request, ActorUserId, cancellationToken);
         return Ok(updated);
+    }
+
+    /// <summary>
+    /// POST /api/tickets/{id}/attachments — multipart/form-data upload, field name
+    /// "file". Gated by TicketUpdate rather than a dedicated Attachment permission:
+    /// attaching a file is the same "can this user change this ticket" question as
+    /// adding a comment (see Permissions.cs — TicketDelete is the example of a
+    /// genuinely narrower policy that *does* earn its own constant, because hard
+    /// delete is a materially bigger risk than any of these).
+    /// RequestSizeLimit sits a little above Attachment's own 25 MB domain limit, so
+    /// a too-large file gets ASP.NET Core's request all the way into the pipeline
+    /// far enough to hit that domain check and come back as a friendly 400 —
+    /// instead of Kestrel's own limit rejecting it earlier with a bare connection
+    /// reset that Swagger UI / curl show no useful message for.
+    /// </summary>
+    [HttpPost("{id:guid}/attachments")]
+    [Authorize(Policy = Permissions.TicketUpdate)]
+    [ProducesResponseType(typeof(AttachmentDto), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [RequestSizeLimit(30_000_000)]
+    public async Task<ActionResult<AttachmentDto>> UploadAttachment(Guid id, IFormFile file, CancellationToken cancellationToken)
+    {
+        await using var stream = file.OpenReadStream();
+        var attachment = await _ticketService.AddAttachmentAsync(id, file.FileName, file.ContentType, stream, file.Length, ActorUserId, cancellationToken);
+        return CreatedAtAction(nameof(GetById), new { id }, attachment);
+    }
+
+    /// <summary>
+    /// GET /api/tickets/{id}/attachments/{attachmentId}/download — streams the raw
+    /// file bytes with the original content type and file name. Gated by
+    /// TicketRead, same as every other read of ticket data.
+    /// </summary>
+    [HttpGet("{id:guid}/attachments/{attachmentId:guid}/download")]
+    [Authorize(Policy = Permissions.TicketRead)]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DownloadAttachment(Guid id, Guid attachmentId, CancellationToken cancellationToken)
+    {
+        var download = await _ticketService.DownloadAttachmentAsync(id, attachmentId, cancellationToken);
+        return download is null ? NotFound() : File(download.Content, download.ContentType, download.FileName);
     }
 
     /// <summary>

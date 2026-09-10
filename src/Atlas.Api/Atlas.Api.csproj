@@ -25,13 +25,25 @@
       constructed OpenApiInfo here. SwaggerUI itself just needs a JSON URL to
       point at, so it has no such dependency.
     -->
-    <PackageReference Include="Azure.Extensions.AspNetCore.Configuration.Secrets" Version="1.5.2" />
-    <PackageReference Include="Azure.Identity" Version="1.21.0" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.12" />
     <PackageReference Include="Swashbuckle.AspNetCore.SwaggerUI" Version="10.2.3" />
 
     <!-- JWT bearer authentication for Del 5. -->
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
+
+    <!--
+      Program.cs's Key Vault block (pulled forward from Del 20 into Del 8) calls
+      Configuration.AddAzureKeyVault(...), which is an extension method from this
+      package, and constructs a DefaultAzureCredential from Azure.Identity to
+      authenticate to it via the App Service's managed identity. Both were added
+      to the real project with `dotnet add package` back in Del 8; recorded here
+      explicitly now because this file is the source of truth for what a fresh
+      `dotnet restore` needs — a csproj missing a package that Program.cs actually
+      uses would only surface as a confusing build error on a clean machine, not
+      here where the packages were already restored once.
+    -->
+    <PackageReference Include="Azure.Extensions.AspNetCore.Configuration.Secrets" Version="1.5.2" />
+    <PackageReference Include="Azure.Identity" Version="1.21.0" />
 
     <!--
       The EF Core CLI tools (`dotnet ef migrations add`, `dotnet ef database
