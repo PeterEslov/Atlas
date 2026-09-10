@@ -129,14 +129,21 @@ supports container deployment — Del 17 ("Docker — containerisering av
 API:et", Phase 5) owns that scope. Del 8 deploys the plain `dotnet publish`
 output instead, the same way `dotnet run` already does locally.
 
-GitHub Actions authenticates to Azure via **OIDC federated credentials**
-(`azure/login@v2`), not a stored client secret — the workflow exchanges its
-own GitHub-issued token for an Azure AD token at run time, scoped to one
-repo and one branch. Nothing secret-shaped lives in GitHub at all, which is
-also why `AZURE_CLIENT_ID`/`AZURE_TENANT_ID`/`AZURE_SUBSCRIPTION_ID` are
-repository **Variables**, not **Secrets** — they're GUIDs that say *which*
-app registration to exchange a token with, not something that grants access
-on its own. See `docs/AZURE_DEPLOYMENT.md` for the exact `az` commands.
+The CI/CD pipeline runs on **Azure Pipelines** (Azure DevOps), not GitHub
+Actions — Peter's source repo lives in Azure Repos. It authenticates to
+Azure via **workload identity federation**, the same no-stored-secret idea
+as GitHub's OIDC login, but set up differently: because Azure DevOps is a
+first-party Microsoft service (unlike GitHub, which Azure only trusts once
+you manually register the relationship via
+`az ad app federated-credential create`), the whole thing is one guided step
+in the Azure DevOps portal — an Azure Resource Manager service connection
+with "Workload Identity federation (automatic)", scoped to the resource
+group, not the subscription. It creates the app registration, service
+principal, and federated credential together; `azure-pipelines.yml`
+references the result by its service connection *name* only — no
+client-id/tenant-id/subscription-id values live in the pipeline definition
+at all, which is even less than GitHub's Variables-not-Secrets approach
+needed. See `docs/AZURE_DEPLOYMENT.md` section 5 for the exact steps.
 
 ## Current known simplifications (by design)
 

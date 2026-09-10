@@ -117,7 +117,9 @@ Principle, not just a folder convention.
 
 Planned for later phases (see [Roadmap](#roadmap)): Azure Entra ID, Azure
 Blob Storage, Azure Service Bus, a background worker, Redis, Application
-Insights, Docker, GitHub Actions, Bicep, Key Vault, and a React frontend.
+Insights, Docker, Bicep, and a React frontend. (Key Vault and a CI/CD
+pipeline are already in place as of Del 8 — see below — pulled forward
+rather than left for later.)
 
 ## Project structure
 
@@ -379,8 +381,9 @@ dotnet test
 
 `docs/AZURE_DEPLOYMENT.md` is a step-by-step, copy-pasteable checklist:
 resource group, App Service plan and Web App, application settings, a
-passwordless (OIDC) GitHub Actions pipeline that builds/tests/deploys on
-every push to `main` (`.github/workflows/deploy.yml`), and how to verify it.
+passwordless (workload identity federation) Azure Pipelines pipeline that
+builds/tests/deploys on every push to `main` (`azure-pipelines.yml`, run
+from Azure DevOps), and how to verify it.
 Worth reading before you run it: App Service can't reach the local SQL
 Server this project uses through Del 1–7, so only `/health` (and, if you
 turn it on, Swagger) are expected to work until Del 9 (Azure SQL) lands —
@@ -461,14 +464,17 @@ database.
       Organizations & Users management (Del 6), Projects & Teams management
       and the richer ticket workflows (reopen, tag by name, filter by project,
       real hard-delete) that closed out Del 7
-- [~] **Phase 3 — Azure**: App Service + GitHub Actions CI/CD pipeline, plus
-      the JWT signing key in Key Vault (Del 8, pulled forward from Del 20 —
-      see `docs/AZURE_DEPLOYMENT.md`) built; not yet run against a live
-      subscription. Azure SQL (Del 9) and Blob Storage (Del 10) still to
-      come; Del 20 is now mostly just "generalize the Key Vault setup"
+- [~] **Phase 3 — Azure**: App Service + Azure Pipelines CI/CD pipeline
+      (Azure DevOps), plus the JWT signing key in Key Vault (Del 8, pulled
+      forward from Del 20 — see `docs/AZURE_DEPLOYMENT.md`) built; Key Vault
+      role assignment confirmed working against the live subscription,
+      pipeline/deploy steps in progress. Azure SQL (Del 9) and Blob Storage
+      (Del 10) still to come; Del 20 is now mostly just "generalize the Key
+      Vault setup"
 - [ ] **Phase 4 — Enterprise**: Service Bus, background worker, Redis, audit logging
 - [ ] **Phase 5 — Quality**: broader test suite, Docker, structured logging, monitoring
-- [ ] **Phase 6 — DevOps**: GitHub Actions CI/CD, Bicep (Infrastructure as Code)
+- [ ] **Phase 6 — DevOps**: Bicep (Infrastructure as Code) — CI/CD itself
+      already exists as of Del 8, on Azure Pipelines
 - [ ] **Phase 7 — Polish**: React frontend, dashboard, demo environment
 
 See the conversation history / project notes for the detailed breakdown of

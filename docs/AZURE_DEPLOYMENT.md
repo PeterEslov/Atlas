@@ -1,8 +1,9 @@
 # Azure-driftsättning (Del 8)
 
 Det här dokumentet är en körbar checklista för att driftsätta Atlas.Api till
-Azure App Service, med en GitHub Actions-pipeline som bygger, testar och
-driftsätter automatiskt vid varje push till `main`. Kommandona nedan kör du
+Azure App Service, med en Azure Pipelines-pipeline (Azure DevOps) som
+bygger, testar och driftsätter automatiskt vid varje push till `main`.
+Kommandona nedan kör du
 själv — se resonemanget i README/ARCHITECTURE om varför: den här sessionen
 kan inte pålitligt köra kommandon på din maskin just nu, men framför allt är
 det *dina* beslut (prenumeration, resursnamn, kostnad) som CLI:t utför.
@@ -22,15 +23,48 @@ du bygger nu — det är precis vad man förväntar sig av en driftsättning som
 
 - Azure CLI inloggat: `az login`
 - .NET 10 SDK lokalt (redan på plats sedan tidigare Delar)
-- Ditt lokala repo pushat till GitHub. Om det inte redan är det:
+- Ditt lokala repo pushat till ditt Azure DevOps-repo (Azure Repos). Sätt
+  de här tre en gång, med dina riktiga värden:
+  ```bash
+  DEVOPS_ORG_URL=https://dev.azure.com/<din-organisation>
+  DEVOPS_PROJECT=<ditt-projektnamn>
+  DEVOPS_REPO=<ditt-reponamn>
   ```
+  Om koden inte redan ligger där:
+  ```bash
   git init
   git add .
   git commit -m "Initial commit"
-  gh repo create ProjectAtlas --private --source=. --remote=origin --push
+  git remote add origin "$DEVOPS_ORG_URL/$DEVOPS_PROJECT/_git/$DEVOPS_REPO"
+  git push -u origin main
   ```
-  (`gh` är GitHub CLI — alternativt skapa repot i webbgränssnittet och kör
-  `git remote add origin <url>` + `git push -u origin main` själv.)
+  (Redan pushat sedan tidigare? Då kan du hoppa över det här — resten av
+  dokumentet förutsätter bara att `main` finns i ditt Azure DevOps-repo.)
+
+**Kör du Git Bash (MINGW64) på Windows? Kör den här raden innan du fortsätter:**
+
+```bash
+export MSYS_NO_PATHCONV=1
+```
+
+Det här dokumentet har flera kommandon längre ner vars värde börjar med `/`
+(t.ex. `--scope "$VAULT_ID"` i avsnitt 3, och
+`--scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RG"` i avsnitt 5)
+— fullständiga Azure-resurs-ID:n, inte filsökvägar. Git Bash bygger på
+MSYS2, och MSYS2:s shell skriver **automatiskt** om varje kommandoradsargument
+som ser ut som en Unix-sökväg (börjar med `/`) till en Windows-sökväg innan
+den når ett "riktigt" Windows-program som `az.exe` — även när argumentet
+egentligen är en URL-liknande resurs-ID-sträng, inte en fil. Resultatet är
+att `az` aldrig ser det `/subscriptions/...`-värde du satte i variabeln,
+utan något som redan är omskrivet till en Windows-sökväg, vilket ger just
+felet `(MissingSubscription) The request did not have a subscription or a
+valid tenant level resource provider.` — även när prenumerationen, valvet
+och variabeln alla är korrekta (så här kan det se helt rätt ut i ett
+`echo`, och ändå fela). `MSYS_NO_PATHCONV=1` stänger av just den
+auto-konverteringen för resten av terminalsessionen. Kör du PowerShell
+eller `cmd.exe` istället för Git Bash berör det här dig inte alls — det är
+specifikt en MSYS/Git-Bash-grej.
+(Källa: [Azure CLI:s egen dokumentation om Git Bash](https://github.com/Azure/azure-cli/blob/dev/doc/use_cli_with_git_bash.md).)
 
 ## 1. Resursgrupp, App Service-plan och Web App
 
@@ -139,7 +173,7 @@ det riktiga namnet:
 
 ```bash
 # Ny terminal sedan steg 1? Sätt om RG/WEBAPP_NAME också.
-KEYVAULT_NAME=mykeyvaultpeter
+KEYVAULT_NAME=<namnet på ditt befintliga Key Vault>
 
 # 1) System-assigned managed identity på App Service — det är så appen
 #    autentiserar mot valvet. Ingen nyckel eller connection string behövs
@@ -147,17 +181,35 @@ KEYVAULT_NAME=mykeyvaultpeter
 az webapp identity assign --name "$WEBAPP_NAME" --resource-group "$RG"
 PRINCIPAL_ID=$(az webapp identity show --name "$WEBAPP_NAME" --resource-group "$RG" --query principalId -o tsv)
 
+# Skriv alltid ut det du precis fångade i en variabel innan du använder den
+# i nästa kommando — ett tomt värde här ger annars ett kommando med ett
+# ofullständigt --scope/--assignee längre ner, och Azure svarar med ett
+# kryptiskt fel (t.ex. "MissingSubscription") som inte alls pekar på att
+# variabeln var tom.
+echo "PRINCIPAL_ID=$PRINCIPAL_ID"   # ska vara ett GUID, inte tomt
+
 # 2) Läsrättighet för den identiteten. Vilket kommando som gäller beror på
 #    vilken auktoriseringsmodell ditt befintliga valv använder — kolla:
 az keyvault show --name "$KEYVAULT_NAME" --query properties.enableRbacAuthorization -o tsv
 ```
 
 ```bash
-# "true" -> RBAC-modellen:
+# "true" -> RBAC-modellen. Fångar valvets resurs-id i en egen variabel och
+# skriver ut den FÖRST — samma anledning som ovan: en tom
+# kommandosubstitution rätt in i --scope är exakt vad som ger
+# "(MissingSubscription) The request did not have a subscription..." — ARM
+# tolkar en tom/ofullständig scope-sträng som att /subscriptions/-delen av
+# URL:en saknas helt, vilket är precis vad felet säger, bokstavligen.
+VAULT_ID=$(az keyvault show --name "$KEYVAULT_NAME" --query id -o tsv)
+echo "VAULT_ID=$VAULT_ID"   # ska se ut som /subscriptions/.../vaults/<namn>
+
+# Git Bash (MINGW64)? Om du fick (MissingSubscription) här trots att
+# VAULT_ID ovan ser helt rätt ut: se Git Bash-notisen i avsnitt 0 —
+# `export MSYS_NO_PATHCONV=1` och kör om kommandot.
 az role assignment create \
   --role "Key Vault Secrets User" \
   --assignee "$PRINCIPAL_ID" \
-  --scope "$(az keyvault show --name "$KEYVAULT_NAME" --query id -o tsv)"
+  --scope "$VAULT_ID"
 ```
 
 ```bash
@@ -196,57 +248,60 @@ Portalen: din Web App → **Monitoring → Health check** → aktivera, sökväg
 medvetet inte är beroende av databasen (se kommentaren där för varför) —
 så det här fungerar redan efter steg 1–3, innan Del 9 finns.
 
-## 5. GitHub Actions: lösenordsfri inloggning (OIDC)
+## 5. Azure Pipelines: lösenordsfri inloggning (workload identity federation)
 
-Ingen klienthemlighet lagras i GitHub alls — workflowen (`.github/workflows/deploy.yml`)
-växlar sin egen GitHub-utfärdade OIDC-token mot en Azure AD-token, begränsat
-till just det här repot och just `main`-branchen.
+Samma idé som OIDC för GitHub Actions — ingen klienthemlighet lagras någonstans,
+pipelinen växlar en tillfällig token mot ett Azure AD-token vid varje körning —
+men Azure DevOps är ett **förstapartssystem** ur Azures perspektiv (till
+skillnad från GitHub, som Azure bara litar på efter att du manuellt registrerat
+förtroendet via `az ad app federated-credential create`, som i den tidigare
+GitHub-versionen av det här avsnittet). Det gör att hela uppsättningen görs i
+Azure DevOps-portalen istället för via `az`-kommandon: du kör i praktiken
+`az ad app create` + `az ad sp create` + `az role assignment create` +
+`az ad app federated-credential create` från förra avsnittets GitHub-flöde,
+men som EN guidad wizard som gör allt åt dig.
 
-```bash
-# Ny terminal sedan steg 1? Sätt om RG=rg-projectatlas-dev-sc också.
-SUBSCRIPTION_ID=$(az account show --query id -o tsv)
-TENANT_ID=$(az account show --query tenantId -o tsv)
+**Vad du behöver:** tillräckliga Entra ID-rättigheter för att skapa en app-
+registrering (antingen rollen *Application Administrator* i Entra ID, eller
+att du är *Owner* på prenumerationen — de flesta personliga/test-prenumerationer,
+som din, uppfyller det automatiskt eftersom du är den som skapade dem). Om
+steget nedan misslyckas med ett behörighetsfel är det nästan alltid det här.
 
-APP_ID=$(az ad app create --display-name "github-projectatlas-deploy" --query appId -o tsv)
-az ad sp create --id "$APP_ID"
+1. I Azure DevOps: **Project Settings** (nere till vänster) →
+   **Service connections** → **New service connection** → **Azure Resource
+   Manager** → **Workload Identity federation (automatic)**.
+2. Scope level: **Resource Group** (inte Subscription) — samma
+   minsta-möjliga-behörighet-princip som Contributor-rollen hade i GitHub-
+   versionen: en läckt eller felkonfigurerad pipeline kan då som mest skada
+   det här ena projektets resurser, inte hela prenumerationen. Välj din
+   prenumeration (`PetersSubscriptionForTest`) och resursgrupp
+   (`$RG`, dvs. `rg-projectatlas-dev-sc`).
+3. Ge den ett namn du känner igen, t.ex. `sc-projectatlas-dev-sc`, och spara.
+   Det namnet är det enda pipelinen behöver referera till — Azure DevOps
+   lagrar och hanterar App Registration, service principal *och* det
+   federerade förtroendet bakom den namngivna service connection-posten. Inga
+   client-id/tenant-id/subscription-id-värden att kopiera någonstans, till
+   skillnad från GitHub-flödet.
+4. **Pipelines** → **New pipeline** → **Azure Repos Git** → välj ditt repo →
+   **Existing Azure Pipelines YAML file** → `/azure-pipelines.yml` (filen
+   som redan ligger i repots rot, se nedan) → **Save** (kör inte än om du
+   vill dubbelkolla service connection-namnet i filen först).
 
-# Contributor begränsat till resursgruppen, inte hela prenumerationen — en
-# läckt eller felkonfigurerad pipeline kan då som mest skada det här ena
-# projektets resurser.
-az role assignment create \
-  --assignee "$APP_ID" \
-  --role Contributor \
-  --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RG"
+`azure-pipelines.yml` i repots rot refererar till service connection-namnet
+från steg 3 via variabeln `azureServiceConnection` överst i filen — öppna den
+och sätt den till exakt det namn du valde:
 
-# Byt <ditt-github-anvandarnamn>/<repo-namn> mot ditt faktiska repo.
-az ad app federated-credential create \
-  --id "$APP_ID" \
-  --parameters '{
-    "name": "github-projectatlas-main",
-    "issuer": "https://token.actions.githubusercontent.com",
-    "subject": "repo:<ditt-github-anvandarnamn>/<repo-namn>:ref:refs/heads/main",
-    "audiences": ["api://AzureADTokenExchange"]
-  }'
-
-echo "AZURE_CLIENT_ID=$APP_ID"
-echo "AZURE_TENANT_ID=$TENANT_ID"
-echo "AZURE_SUBSCRIPTION_ID=$SUBSCRIPTION_ID"
+```yaml
+variables:
+  azureServiceConnection: 'sc-projectatlas-dev-sc'   # namnet från steg 3
+  webAppName: 'app-projectatlas-dev-sc'
 ```
-
-Lägg de tre värdena som **Repository variables** (inte Secrets — det är
-GUID:er, inga hemligheter) i GitHub: repot → Settings → Secrets and
-variables → Actions → Variables:
-
-- `AZURE_CLIENT_ID`
-- `AZURE_TENANT_ID`
-- `AZURE_SUBSCRIPTION_ID`
-- `AZURE_WEBAPP_NAME` — samma namn du valde i steg 1
 
 ## 6. Verifiera
 
-Pusha till `main` (eller kör workflowen manuellt via Actions-fliken →
-"Build, test and deploy to Azure" → Run workflow), följ körningen i
-GitHub Actions-fliken, och kontrollera sedan:
+Pusha till `main` (eller kör pipelinen manuellt via **Pipelines**-fliken →
+välj pipelinen → **Run pipeline**), följ körningen där, och kontrollera
+sedan:
 
 ```bash
 curl "https://$WEBAPP_NAME.azurewebsites.net/health"

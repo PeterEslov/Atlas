@@ -1,0 +1,81 @@
+# Azure Pipelines definition for Del 8 (see docs/AZURE_DEPLOYMENT.md,
+# section 5, for how the "azureServiceConnection" below gets created and
+# authenticated — a Workload Identity federation service connection, no
+# stored secret of any kind).
+#
+# Two stages, mirroring the original GitHub Actions design this replaced:
+# BuildAndTest always runs (on every push and PR against main); Deploy only
+# runs on main itself, and only if BuildAndTest succeeded. Deliberately a
+# plain job (not a "deployment" job against an Environment) to keep this
+# Del's scope to "a pipeline that deploys automatically" — approval gates /
+# Environments are a natural follow-up, not something Del 8 needs.
+
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+variables:
+  buildConfiguration: 'Release'
+  azureServiceConnection: 'sc-projectatlas-dev-sc'   # set to your actual service connection name (docs/AZURE_DEPLOYMENT.md section 5)
+  webAppName: 'app-projectatlas-dev-sc'              # set to your actual Web App name (docs/AZURE_DEPLOYMENT.md section 1)
+
+stages:
+  - stage: BuildAndTest
+    displayName: 'Build & test'
+    jobs:
+      - job: Build
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - task: UseDotNet@2
+            displayName: 'Install .NET 10 SDK'
+            inputs:
+              packageType: 'sdk'
+              version: '10.x'
+
+          - script: dotnet restore
+            displayName: 'dotnet restore'
+
+          - script: dotnet build --configuration $(buildConfiguration) --no-restore
+            displayName: 'dotnet build'
+
+          - script: dotnet test --configuration $(buildConfiguration) --no-build
+            displayName: 'dotnet test'
+
+          - script: >-
+              dotnet publish src/Atlas.Api/Atlas.Api.csproj
+              --configuration $(buildConfiguration)
+              --no-build
+              --output $(Build.ArtifactStagingDirectory)/publish
+            displayName: 'dotnet publish'
+
+          - publish: $(Build.ArtifactStagingDirectory)/publish
+            displayName: 'Publish build artifact'
+            artifact: drop
+
+  - stage: Deploy
+    displayName: 'Deploy to Azure App Service'
+    dependsOn: BuildAndTest
+    # Only deploy on an actual push to main — not on a PR build, even
+    # though PR builds also run the BuildAndTest stage above.
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - job: DeployWebApp
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - download: current
+            artifact: drop
+
+          - task: AzureWebApp@1
+            displayName: 'Deploy to Azure App Service'
+            inputs:
+              azureSubscription: '$(azureServiceConnection)'
+              appName: '$(webAppName)'
+              package: '$(Pipeline.Workspace)/drop'
