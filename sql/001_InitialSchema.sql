@@ -53,6 +53,7 @@ BEGIN
         Email           NVARCHAR(256)    NOT NULL,
         Role            INT              NOT NULL, -- 0 Customer, 1 Agent, 2 Manager, 3 Admin
         IsActive        BIT              NOT NULL CONSTRAINT DF_Users_IsActive DEFAULT (1),
+        PasswordHash    NVARCHAR(500)    NULL,  -- added alongside local JWT auth (Del 5); this file had drifted out of sync with the EF model until 2026-09-10, see docs/AZURE_DEPLOYMENT.md section 7
         CreatedAtUtc    DATETIME2        NOT NULL,
         ModifiedAtUtc   DATETIME2        NULL,
 

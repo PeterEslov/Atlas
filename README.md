@@ -377,17 +377,17 @@ curl -X DELETE "https://localhost:5081/api/teams/<team-guid>/members/<agent-guid
 dotnet test
 ```
 
-## Deploying to Azure (Del 8)
+## Deploying to Azure (Del 8–9)
 
 `docs/AZURE_DEPLOYMENT.md` is a step-by-step, copy-pasteable checklist:
 resource group, App Service plan and Web App, application settings, a
 passwordless (workload identity federation) Azure Pipelines pipeline that
 builds/tests/deploys on every push to `main` (`azure-pipelines.yml`, run
-from Azure DevOps), and how to verify it.
-Worth reading before you run it: App Service can't reach the local SQL
-Server this project uses through Del 1–7, so only `/health` (and, if you
-turn it on, Swagger) are expected to work until Del 9 (Azure SQL) lands —
-that's explained up front in the doc, not a surprise at the end of it.
+from Azure DevOps), Azure SQL wired in via Key Vault (section 7), and how
+to verify it. As of Del 9 (confirmed working end-to-end 2026-09-10), the
+whole API is functional in Azure — not just `/health` and Swagger — since
+App Service can finally reach a real cloud database instead of the local
+SQL Server this project used through Del 1–7.
 
 ## Authentication & authorization
 
@@ -464,13 +464,14 @@ database.
       Organizations & Users management (Del 6), Projects & Teams management
       and the richer ticket workflows (reopen, tag by name, filter by project,
       real hard-delete) that closed out Del 7
-- [~] **Phase 3 — Azure**: Del 8 confirmed working end-to-end against the
-      live subscription — App Service + Azure Pipelines CI/CD pipeline
-      (Azure DevOps), JWT signing key in Key Vault (pulled forward from
-      Del 20 — see `docs/AZURE_DEPLOYMENT.md`), `/health` responding
-      `Healthy` at `https://app-projectatlas-dev-sc.azurewebsites.net/health`
-      (2026-09-10). Azure SQL (Del 9) and Blob Storage (Del 10) still to
-      come; Del 20 is now mostly just "generalize the Key Vault setup"
+- [~] **Phase 3 — Azure**: Del 8 and Del 9 both confirmed working
+      end-to-end against the live subscription (2026-09-10) — App Service +
+      Azure Pipelines CI/CD pipeline (Azure DevOps), JWT signing key *and*
+      the Azure SQL connection string in Key Vault (both pulled forward
+      from Del 20 — see `docs/AZURE_DEPLOYMENT.md`), `POST /api/auth/register`
+      returning a real JWT through App Service against a live Azure SQL
+      database. Blob Storage (Del 10) still to come; Del 20 is now mostly
+      just "generalize the Key Vault setup, add a least-privilege SQL login"
 - [ ] **Phase 4 — Enterprise**: Service Bus, background worker, Redis, audit logging
 - [ ] **Phase 5 — Quality**: broader test suite, Docker, structured logging, monitoring
 - [ ] **Phase 6 — DevOps**: Bicep (Infrastructure as Code) — CI/CD itself

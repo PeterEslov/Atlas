@@ -293,7 +293,7 @@ och sätt den till exakt det namn du valde:
 
 ```yaml
 variables:
-  azureServiceConnection: 'project-atlas-connectionname'   # namnet från steg 3
+  azureServiceConnection: 'sc-projectatlas-dev-sc'   # namnet från steg 3
   webAppName: 'app-projectatlas-dev-sc'
 ```
 
@@ -314,13 +314,189 @@ curl "https://$WEBAPP_NAME.azurewebsites.net/openapi/v1.json"
 Att `/api/auth/login` eller `/api/tickets` svarar med ett databasfel just nu
 är väntat (se ingressen ovan) — det är precis den biten Del 9 stänger.
 
-## Nästa: Del 9 — Azure SQL
+## 7. Del 9: Azure SQL — koppla in din befintliga server
 
-Sätt `ConnectionStrings:AtlasDb` till en riktig Azure SQL-instans — och nu
-när valvet redan är kopplat in (avsnitt 3), gå direkt dit i stället för
-vägen via en vanlig Application Setting: samma `az keyvault secret set`-
-mönster som `Jwt--SigningKey`, fast med secret-namnet
-`ConnectionStrings--AtlasDb`. Kör migrationerna mot den nya databasen
-(`dotnet ef database update` — inte auto-migrate-on-startup, som medvetet
-stannar kvar som en `IsDevelopment()`-only-genväg, se `Program.cs`), och
-hela API:et blir funktionellt i molnet.
+Del 9:s enda egentliga jobb är att ge `ConnectionStrings:AtlasDb` ett
+riktigt värde i molnet — allt annat (Key Vault-kopplingen, managed
+identity-autentiseringen, App Service) finns redan på plats sedan Del 8.
+Du har redan en Azure SQL-server, så vi skapar bara en ny, tom databas på
+den för Atlas — samma "återanvänd resursen, håll projektets data för sig
+själv"-princip som Key Vault i avsnitt 3.
+
+En sak värd att känna till innan du börjar: `DependencyInjection.cs` har
+redan `sqlOptions.EnableRetryOnFailure(...)` inställt på `AtlasDbContext`
+— det är inte nytt för Del 9, det stod där redan från Fas 1, som
+förberedelse för just det här. Transienta nätverksfel (en kort omkoppling,
+en serverless-databas som vaknar från auto-pause) är normalt för Azure SQL
+på ett sätt de aldrig är mot en lokal SQL Server-instans, och utan
+automatisk omförsök hade en helt frisk databas kunnat ge sporadiska 500:or.
+
+```bash
+# Ny terminal sedan tidigare avsnitt? Sätt om RG/WEBAPP_NAME/KEYVAULT_NAME också.
+SQL_SERVER_NAME=<namnet på din befintliga SQL-server, utan .database.windows.net>
+SQL_RG=<resursgruppen där den servern faktiskt ligger>
+SQL_DB_NAME=sqldb-projectatlas-dev-sc
+```
+
+### 7.1 Skapa databasen
+
+Serverless General Purpose med Azures "free limit": 100 000 vCore-sekunder
+och 32 GB lagring gratis per månad, upp till tio sådana databaser per
+prenumeration. Auto-pause gör att den pausar sig själv (och slutar
+debitera beräkningskraft) efter en period av inaktivitet — passar ett
+portfolioprojekt som inte körs kontinuerligt precis.
+
+```bash
+az sql db create \
+  --resource-group "$SQL_RG" \
+  --server "$SQL_SERVER_NAME" \
+  --name "$SQL_DB_NAME" \
+  --edition GeneralPurpose \
+  --family Gen5 \
+  --capacity 2 \
+  --compute-model Serverless \
+  --auto-pause-delay 60 \
+  --use-free-limit \
+  --free-limit-exhaustion-behavior AutoPause
+```
+
+Redan använt gratiskvoten på den här prenumerationen (t.ex. av en annan
+databas)? Ta bort de tre sista flaggorna (`--use-free-limit` osv.) och byt
+`--edition GeneralPurpose ... --compute-model Serverless`-raderna mot
+`--service-objective Basic` — enklaste betalda alternativet, runt
+$5/månad, ingen auto-pause men förutsägbart och billigt.
+
+### 7.2 Brandvägg
+
+App Service måste komma in, och (tillfälligt) din egen dator för att köra
+migrationerna i nästa steg.
+
+```bash
+az sql server firewall-rule create \
+  --resource-group "$SQL_RG" \
+  --server "$SQL_SERVER_NAME" \
+  --name AllowAzureServices \
+  --start-ip-address 0.0.0.0 \
+  --end-ip-address 0.0.0.0
+```
+
+`0.0.0.0`–`0.0.0.0` är inte "alla IP-adresser" trots hur det ser ut — det
+är Azures dokumenterade specialvärde för just "tillåt andra Azure-tjänster
+i samma prenumeration", inte ett brandväggshål mot hela internet.
+
+Lägg till din egen dators IP via **portalen** istället för CLI:t här —
+enklast och minst risk för fel: din SQL-server → **Networking** → **Add
+your client IPv4 address** → Save. Du behöver den bara tillfälligt för
+nästa steg; ta gärna bort regeln igen efteråt om du vill hålla brandväggen
+så snäv som möjligt.
+
+### 7.3 Kör migrationerna mot Azure SQL
+
+**Kör bara det här — kör aldrig `sql/001_InitialSchema.sql` mot Azure SQL,
+trots att det kan kännas som en genväg.** Den filen är en handskriven
+referens, inte en körbar sanning, och den drev genuint isär från EF-
+modellen en gång (saknade `PasswordHash` efter Del 5, ingen märkte det
+förrän den råkade köras mot en skarp databas — se `ARCHITECTURE.md`). Bara
+`dotnet ef database update` nedan garanterar ett schema som faktiskt
+matchar koden.
+
+Sätt anslutningssträngen som en miljövariabel för just den här
+terminalsessionen — aldrig i en committad fil — kör migrationerna, och
+nollställ den direkt efteråt så att ett vanligt `dotnet run` efteråt inte
+råkar peka mot Azure SQL av misstag:
+
+```bash
+# Byt ut <admin-login> och <losenord> mot din serveradmins riktiga
+# inloggning (den du redan har sedan servern skapades). Enkla citattecken
+# runt HELA strängen skyddar mot att Bash tolkar tecken som ; $ ! i
+# lösenordet som något annat än bokstäver.
+export ConnectionStrings__AtlasDb='Server=tcp:'"$SQL_SERVER_NAME"'.database.windows.net,1433;Initial Catalog='"$SQL_DB_NAME"';User ID=<admin-login>;Password=<losenord>;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;'
+
+# Ny terminal sedan avsnitt 7 började? $SQL_SERVER_NAME är då tom, och du
+# får en anslutningssträng som "Server=tcp:.database.windows.net,..." — ett
+# värdnamn som inte går att slå upp alls ("No such host is known"). Kolla
+# alltid innan du litar på den:
+echo "ConnectionStrings__AtlasDb=$ConnectionStrings__AtlasDb"
+
+cd src/Atlas.Api
+dotnet ef database update --project ../Atlas.Infrastructure --startup-project .
+cd ../..
+
+unset ConnectionStrings__AtlasDb
+```
+
+`ConnectionStrings__AtlasDb` (dubbelt understreck, inte dubbelt
+bindestreck — det är en miljövariabel, inte ett Key Vault-secretnamn) läses
+automatiskt av `AtlasDbContextFactory` via `.AddEnvironmentVariables()`,
+och vinner över `appsettings.Development.json` så länge variabeln är satt
+— exakt samma konfigurationsmekanik som Key Vault-hemligheterna använder,
+bara en annan källa.
+
+### 7.4 Spara anslutningssträngen i Key Vault
+
+Samma mönster som `Jwt--SigningKey` i avsnitt 3 — dubbelt bindestreck,
+och ingen ny App Setting behövs, eftersom `KeyVault:Name` redan pekar App
+Service mot rätt valv sedan Del 8:
+
+```bash
+az keyvault secret set \
+  --vault-name "$KEYVAULT_NAME" \
+  --name "ConnectionStrings--AtlasDb" \
+  --value 'Server=tcp:'"$SQL_SERVER_NAME"'.database.windows.net,1433;Initial Catalog='"$SQL_DB_NAME"';User ID=<admin-login>;Password=<losenord>;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;'
+
+az webapp restart --name "$WEBAPP_NAME" --resource-group "$RG"
+```
+
+Omstarten är inte strikt nödvändig (App Service läser Key Vault-hemligheter
+vid uppstart ändå), men gör att du inte behöver vänta på nästa naturliga
+omstart för att verifiera direkt.
+
+**En medveten genväg värd att känna till:** det här återanvänder din
+SQL-servers admin-inloggning i Key Vault-hemligheten, i stället för att
+skapa en separat, snävare SQL-inloggning med rättigheter enbart mot
+`$SQL_DB_NAME` (samma minsta-möjliga-behörighet-princip som RBAC-rollen i
+avsnitt 3 följer). Att skapa en sådan inloggning kräver att köra `CREATE
+LOGIN`/`CREATE USER`-T-SQL mot servern via ett klientverktyg (t.ex.
+portalens Query Editor, se 7.5) snarare än `az`, vilket är fullt görbart
+men ett eget litet steg — ett bra kandidat-städjobb för Del 20 när den
+generaliserar hela Key Vault-uppsättningen.
+
+### 7.5 Seeda den nya databasen och verifiera
+
+Migrationerna skapar schemat, men den nya databasen är helt tom — samma
+kluck-och-ägg-problem som lokal dev hade (se README): att registrera en
+användare kräver ett giltigt `organizationId`, men det första organization-
+id:t måste in via SQL. Enklast utan att installera något lokalt: din
+SQL-databas i portalen → **Query editor (preview)** → logga in med
+admin-inloggningen → klistra in och kör `sql/002_SeedData.sql`.
+
+`002_SeedData.sql` genererar id:na med `NEWID()`, så de är olika varje gång
+— det finns inget fast värde att kopiera från den här texten. Kör den här
+frågan i samma Query editor direkt efteråt för att hämta det riktiga
+`organizationId`:t:
+
+```sql
+SELECT Id, Name FROM dbo.Organizations WHERE Name = N'Northstar IT';
+```
+
+Sedan, mot App Service (inte längre lokalt):
+
+```bash
+curl "https://$WEBAPP_NAME.azurewebsites.net/api/auth/register" -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"email":"demo@example.com","password":"Test1234!","organizationId":"<organizationId från seed-datan>","role":"Admin"}'
+```
+
+Ett 200/201-svar med en JWT i svaret betyder att hela kedjan fungerar
+end-to-end: App Service → Key Vault → managed identity → Azure SQL. Det är
+den riktiga bekräftelsen på att Del 9 är klar — mer talande än vilken
+enskild logg som helst, av samma anledning som `/health` var det för
+Del 8.
+
+## Nästa: Del 10 — Azure Blob Storage
+
+Filuppladdning för `Attachments` (`Attachment.BlobName` är i dagsläget bara
+en textkolumn, ingen uppladdningsendpoint finns än) — samma mönster igen:
+koppla in en Azure Storage-resurs och autentisera App Service mot den via
+samma managed identity som redan pratar med Key Vault och (från och med
+Del 9) Azure SQL, i stället för ännu en lagrad hemlighet.

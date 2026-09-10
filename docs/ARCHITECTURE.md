@@ -156,14 +156,50 @@ client-id/tenant-id/subscription-id values live in the pipeline definition
 at all, which is even less than GitHub's Variables-not-Secrets approach
 needed. See `docs/AZURE_DEPLOYMENT.md` section 5 for the exact steps.
 
+**Del 9 — Azure SQL, reusing an existing server.** Same reuse-what's-already-
+there principle as Key Vault: Peter had a SQL logical server in his
+subscription already, so Del 9 provisions a new, empty database on it
+(serverless General Purpose with Azure's free monthly limit — 100,000
+vCore-seconds, auto-pause when idle) rather than standing up a whole new
+server. The connection string follows `Jwt--SigningKey`'s exact pattern into
+Key Vault as `ConnectionStrings--AtlasDb` — no new App Setting needed, since
+`KeyVault:Name` was already wired in Del 8. `DependencyInjection.cs`'s
+`sqlOptions.EnableRetryOnFailure(...)` — present since Fas 1, well before
+there was any cloud database to need it — earned its keep here: Azure SQL
+sees transient faults (a serverless database waking from auto-pause, a
+brief network blip) that a local SQL Server instance essentially never does.
+
+**Confirmed working end-to-end against the live subscription on 2026-09-10**:
+`POST /api/auth/register` through App Service returns a signed JWT with the
+correct claims and permission set. Getting there surfaced one genuine bug,
+not an Azure quirk: `sql/001_InitialSchema.sql` — the hand-written schema
+reference this doc's own header warns not to run directly — had quietly
+drifted out of sync with the EF model since Del 5 added `User.PasswordHash`;
+nobody had touched the file since. It got run against the fresh Azure SQL
+database anyway (easy mistake — the Query editor conflates "run some SQL
+here" with "run the *right* SQL here"), producing a `Users` table missing
+that column and a 500 with no useful detail (the exception-hiding
+middleware doing exactly its job — `az webapp log tail` was what actually
+showed `Invalid column name 'PasswordHash'`). The fix was two-part: correct
+the reference file itself (now matches the migration), and rebuild the
+Azure SQL schema purely from `dotnet ef database update` — dropping every
+foreign key and table first (a short dynamic script over `sys.foreign_keys`/
+`sys.tables`, since hand-ordering 14 tables' drop order isn't worth doing
+twice) rather than trying to patch the drifted schema column-by-column.
+That's also where a second, smaller version of the Del 8 MSYS lesson showed
+up again: `SQL_SERVER_NAME` unset in a fresh terminal window produced a
+connection string like `Server=tcp:.database.windows.net,...` — a host that
+plainly can't resolve — the same "echo the value before you trust it in the
+next command" discipline that `MSYS_NO_PATHCONV` debugging already taught.
+
 ## Current known simplifications (by design)
 
-- App Service (Del 8) has nothing behind `ConnectionStrings:AtlasDb` yet —
-  Azure can't reach the local dev SQL Server this project has used through
-  Del 1–7 (it's behind a home NAT, not a public IP). Every database-backed
-  endpoint will fail in Azure until Del 9 (Azure SQL) lands; only `/health`
-  and, if `EnableSwaggerUi` is turned on, the OpenAPI/Swagger surface are
-  expected to work there in the meantime. See `docs/AZURE_DEPLOYMENT.md`.
+- Azure SQL (Del 9) reuses Peter's existing SQL login for the moment — the
+  Key Vault secret holds the server admin's own credentials rather than a
+  new login scoped to just `AtlasDb`. Creating that narrower login needs a
+  T-SQL client against the server (`CREATE LOGIN`/`CREATE USER`, not an
+  `az` command), which is why it's deferred rather than done on the spot —
+  a good candidate for Del 20 when it generalizes the Key Vault setup.
 - `actorUserId`/`createdByUserId` query parameters are gone (Del 5) — every
   action now reads the caller's id from the JWT's `sub` claim via
   `ICurrentUserService`. What's still missing: no token revocation or
@@ -179,12 +215,12 @@ needed. See `docs/AZURE_DEPLOYMENT.md` section 5 for the exact steps.
   background worker and Del 12's Service Bus consumers).
 - `Attachment.BlobName` is a plain string column; there is no upload
   endpoint yet. Phase 3 (Del 10) adds Azure Blob Storage and the upload flow.
-- The JWT signing key lives in `appsettings.Development.json` / user-secrets
-  locally, and as an Azure Key Vault secret once deployed (Del 8 — pulled
-  forward from Del 20, see above, since a vault was already available).
-  The Azure SQL connection string (Del 9) doesn't exist yet at all; once it
-  does, it follows the same Key Vault pattern rather than repeating Del 8's
-  original plain-App-Service-setting approach. Phase 3 (Del 20) is now
+- The JWT signing key and the Azure SQL connection string both live in
+  `appsettings.Development.json` / user-secrets locally, and as Azure Key
+  Vault secrets once deployed (`Jwt--SigningKey` since Del 8,
+  `ConnectionStrings--AtlasDb` since Del 9 — both pulled forward from
+  Del 20, since a vault was already available). Phase 3 (Del 20) is now
   mostly about generalizing this — e.g. moving it off a pre-existing vault
-  and onto one provisioned as part of the project's own IaC — rather than
-  introducing Key Vault from scratch.
+  and onto one provisioned as part of the project's own IaC, and replacing
+  the reused server-admin SQL login with a narrower one scoped to just
+  `AtlasDb` — rather than introducing Key Vault from scratch.

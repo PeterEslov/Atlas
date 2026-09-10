@@ -19,7 +19,9 @@ public static class DependencyInjection
         var connectionString = configuration.GetConnectionString("AtlasDb")
             ?? throw new InvalidOperationException(
                 "Connection string 'AtlasDb' was not found. Set it in appsettings.Development.json " +
-                "(local SQL Server / LocalDB) or, in Azure, via App Service connection strings / Key Vault (Del 20).");
+                "(local SQL Server / LocalDB) or, in Azure, as the Key Vault secret " +
+                "ConnectionStrings--AtlasDb (Del 9 — see docs/AZURE_DEPLOYMENT.md section 7; the Key " +
+                "Vault wiring itself was set up back in Del 8, see Program.cs).");
 
         services.AddDbContext<AtlasDbContext>(options =>
             options.UseSqlServer(connectionString, sqlOptions =>
