@@ -10,6 +10,10 @@
 # Del's scope to "a pipeline that deploys automatically" — approval gates /
 # Environments are a natural follow-up, not something Del 8 needs.
 
+variables:
+  azureServiceConnection: 'project-atlas-connectionname'   
+  webAppName: 'app-projectatlas-dev-sc'
+
 trigger:
   branches:
     include:
