@@ -14,6 +14,7 @@ using Atlas.Infrastructure;
 using Atlas.Infrastructure.Persistence;
 using Atlas.Infrastructure.Security;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 
@@ -47,6 +48,32 @@ builder.Services.AddOpenApi("v1", options =>
 });
 
 builder.Services.AddInfrastructure(builder.Configuration);
+
+// Unauthenticated liveness probe for Azure App Service's "Health check" feature
+// (Del 8): App Service pings this path on every instance and takes one out of
+// rotation if it stops responding. Deliberately NOT wired to the database —
+// Azure can't reach the local dev SQL Server used until Del 9 lands Azure SQL,
+// and a health check that depends on something not guaranteed to work yet
+// would just make App Service think every instance is permanently unhealthy.
+// A DbContext-backed check (AddDbContextCheck<AtlasDbContext>()) is the
+// natural follow-up once there's a real cloud database behind it.
+builder.Services.AddHealthChecks();
+
+// Azure App Service terminates TLS at its own edge/reverse proxy and forwards
+// the request to this app as plain HTTP on an internal port. Without this,
+// the app thinks every request arrived over HTTP, and app.UseHttpsRedirection()
+// below would keep "helpfully" redirecting an already-HTTPS client back to
+// http://, which App Service then upgrades again — an infinite redirect loop
+// in the browser. Trusting the platform's X-Forwarded-Proto/-For headers here
+// (with KnownNetworks/KnownProxies cleared, since App Service's proxy isn't a
+// fixed IP this app can pin down in config) is the standard fix; it's a no-op
+// for local `dotnet run`, where there's no reverse proxy in front at all.
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.KnownNetworks.Clear();
+    options.KnownProxies.Clear();
+});
 
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
@@ -126,13 +153,29 @@ var app = builder.Build();
 
 // ---- Middleware pipeline ----------------------------------------------------
 
+// Must run before UseHttpsRedirection (and ideally as early as possible) so
+// every later stage sees the request's real scheme/remote IP rather than
+// what App Service's internal proxy hop looks like. See the comment on
+// AddForwardedHeaders above for why this is here at all.
+app.UseForwardedHeaders();
+
 app.UseAtlasExceptionHandling();
 
-if (app.Environment.IsDevelopment())
+// Swagger UI's availability is now a config switch (EnableSwaggerUi), not an
+// environment check — see appsettings.Development.json (true) vs.
+// appsettings.json's default (false). That split matters once Del 8 deploys
+// to Azure: flipping this on there for portfolio/demo viewing must not also
+// flip on the auto-migrate-on-startup block below, which stays hard-tied to
+// app.Environment.IsDevelopment() precisely so a config change alone can
+// never trigger it against a real database.
+if (app.Configuration.GetValue<bool>("EnableSwaggerUi"))
 {
     app.MapOpenApi();
     app.UseSwaggerUI(options => options.SwaggerEndpoint("/openapi/v1.json", "Project Atlas API v1"));
+}
 
+if (app.Environment.IsDevelopment())
+{
     // Convenience only: applies pending EF Core migrations automatically on
     // startup so a fresh clone works with just `dotnet run`. Never do this
     // against Azure SQL in production — deploy migrations explicitly (Del 8/18).
@@ -146,6 +189,9 @@ app.UseCors("AllowLocalDev");
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
+
+// Unauthenticated on purpose — see the AddHealthChecks() comment above.
+app.MapHealthChecks("/health");
 
 app.Run();
 

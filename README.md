@@ -375,6 +375,17 @@ curl -X DELETE "https://localhost:5081/api/teams/<team-guid>/members/<agent-guid
 dotnet test
 ```
 
+## Deploying to Azure (Del 8)
+
+`docs/AZURE_DEPLOYMENT.md` is a step-by-step, copy-pasteable checklist:
+resource group, App Service plan and Web App, application settings, a
+passwordless (OIDC) GitHub Actions pipeline that builds/tests/deploys on
+every push to `main` (`.github/workflows/deploy.yml`), and how to verify it.
+Worth reading before you run it: App Service can't reach the local SQL
+Server this project uses through Del 1–7, so only `/health` (and, if you
+turn it on, Swagger) are expected to work until Del 9 (Azure SQL) lands —
+that's explained up front in the doc, not a surprise at the end of it.
+
 ## Authentication & authorization
 
 `POST /api/auth/register` and `POST /api/auth/login` are the only anonymous
@@ -449,7 +460,10 @@ database.
       Organizations & Users management (Del 6), Projects & Teams management
       and the richer ticket workflows (reopen, tag by name, filter by project,
       real hard-delete) that closed out Del 7
-- [ ] **Phase 3 — Azure**: Azure SQL, App Service, Blob Storage, Key Vault
+- [~] **Phase 3 — Azure**: App Service + GitHub Actions CI/CD pipeline (Del 8)
+      built — see `docs/AZURE_DEPLOYMENT.md`; not yet run against a live
+      subscription. Azure SQL (Del 9), Blob Storage (Del 10) and Key Vault
+      (Del 20) still to come
 - [ ] **Phase 4 — Enterprise**: Service Bus, background worker, Redis, audit logging
 - [ ] **Phase 5 — Quality**: broader test suite, Docker, structured logging, monitoring
 - [ ] **Phase 6 — DevOps**: GitHub Actions CI/CD, Bicep (Infrastructure as Code)

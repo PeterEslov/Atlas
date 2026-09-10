@@ -77,8 +77,56 @@ against the soft-cancel path (`POST .../status` with `Cancelled`, which
 keeps the full audit trail); see the doc comment on
 `TicketService.DeleteAsync` for the reasoning.
 
+## Del 8 — Azure App Service deployment
+
+Three small but easy-to-miss decisions worth recording, all in `Program.cs`:
+
+- **Swagger UI's availability is a config switch (`EnableSwaggerUi`), not an
+  `app.Environment.IsDevelopment()` check.** The two used to be the same
+  condition, which was fine when "Development" only ever meant "running
+  locally." Once the app also runs in Azure, that stops being true: turning
+  Swagger on for portfolio/demo viewing there must not also turn on the
+  auto-migrate-on-startup block, which stays hard-tied to
+  `IsDevelopment()` specifically so a config change alone can never trigger
+  it against a real database. Two independent knobs, not one overloaded one.
+- **`ForwardedHeadersOptions` + `app.UseForwardedHeaders()`.** Azure App
+  Service terminates TLS at its own edge and forwards requests to the app as
+  plain HTTP internally. Without telling the app to trust the
+  `X-Forwarded-Proto`/`X-Forwarded-For` headers App Service sets,
+  `app.UseHttpsRedirection()` sees every request as HTTP and keeps
+  redirecting an already-HTTPS client back to `http://` — App Service
+  upgrades it again, and the browser loops. `KnownNetworks`/`KnownProxies`
+  are cleared because App Service's proxy isn't a fixed IP this app can pin
+  down in config, unlike a self-hosted reverse proxy would be.
+- **`MapHealthChecks("/health")` is deliberately not wired to the
+  database.** It backs Azure App Service's own "Health check" feature (pings
+  the path, pulls an unhealthy instance out of rotation), and it has to work
+  from the moment Del 8 deploys — which is before Del 9 gives it a cloud
+  database to check. `AddDbContextCheck<AtlasDbContext>()` is the natural
+  follow-up once there's something real behind it.
+
+Docker was deliberately **not** introduced here even though App Service
+supports container deployment — Del 17 ("Docker — containerisering av
+API:et", Phase 5) owns that scope. Del 8 deploys the plain `dotnet publish`
+output instead, the same way `dotnet run` already does locally.
+
+GitHub Actions authenticates to Azure via **OIDC federated credentials**
+(`azure/login@v2`), not a stored client secret — the workflow exchanges its
+own GitHub-issued token for an Azure AD token at run time, scoped to one
+repo and one branch. Nothing secret-shaped lives in GitHub at all, which is
+also why `AZURE_CLIENT_ID`/`AZURE_TENANT_ID`/`AZURE_SUBSCRIPTION_ID` are
+repository **Variables**, not **Secrets** — they're GUIDs that say *which*
+app registration to exchange a token with, not something that grants access
+on its own. See `docs/AZURE_DEPLOYMENT.md` for the exact `az` commands.
+
 ## Current known simplifications (by design)
 
+- App Service (Del 8) has nothing behind `ConnectionStrings:AtlasDb` yet —
+  Azure can't reach the local dev SQL Server this project has used through
+  Del 1–7 (it's behind a home NAT, not a public IP). Every database-backed
+  endpoint will fail in Azure until Del 9 (Azure SQL) lands; only `/health`
+  and, if `EnableSwaggerUi` is turned on, the OpenAPI/Swagger surface are
+  expected to work there in the meantime. See `docs/AZURE_DEPLOYMENT.md`.
 - `actorUserId`/`createdByUserId` query parameters are gone (Del 5) — every
   action now reads the caller's id from the JWT's `sub` claim via
   `ICurrentUserService`. What's still missing: no token revocation or
@@ -94,8 +142,9 @@ keeps the full audit trail); see the doc comment on
   background worker and Del 12's Service Bus consumers).
 - `Attachment.BlobName` is a plain string column; there is no upload
   endpoint yet. Phase 3 (Del 10) adds Azure Blob Storage and the upload flow.
-- Connection strings live in `appsettings.Development.json` / user-secrets
-  for now. Phase 3 (Del 20) replaces this with Azure Key Vault +
-  `DefaultAzureCredential` — no secrets in App Service configuration.
-  The JWT signing key in `appsettings.Development.json` has the same issue
-  and the same eventual fix.
+- Connection strings and the JWT signing key live in
+  `appsettings.Development.json` / user-secrets locally, and as plain Azure
+  App Service Application Settings once deployed (Del 8) — a step up from a
+  committed file, but still a secret sitting in App Service configuration
+  rather than a vault. Phase 3 (Del 20) replaces that with Azure Key Vault +
+  `DefaultAzureCredential`.
