@@ -117,12 +117,15 @@ Principle, not just a folder convention.
 - **.NET Generic Host / Worker Service** (`Atlas.Worker`) — a second, separate
   host process for background work, distinct from `Atlas.Api`'s ASP.NET Core
   host; see [Del 11](#roadmap) below
+- **Azure Service Bus** (`Azure.Messaging.ServiceBus`, Topics/Subscriptions) —
+  publish/subscribe messaging between `Atlas.Api` and `Atlas.Worker`; see
+  [Del 12](#roadmap) below
 
-Planned for later phases (see [Roadmap](#roadmap)): Azure Service Bus, Redis,
-Application Insights, Docker, Bicep, and a React frontend. (Key Vault and a
-CI/CD pipeline are already in place as of Del 8, Azure SQL and Blob Storage
-as of Del 9/10, and a background worker as of Del 11 — see below — all
-pulled forward rather than left for later.)
+Planned for later phases (see [Roadmap](#roadmap)): Redis, Application
+Insights, Docker, Bicep, and a React frontend. (Key Vault and a CI/CD
+pipeline are already in place as of Del 8, Azure SQL and Blob Storage as of
+Del 9/10, a background worker as of Del 11, and Service Bus publish/consume
+as of Del 12 — see below — all pulled forward rather than left for later.)
 
 ## Project structure
 
@@ -242,7 +245,56 @@ Optionally load demo data:
 sqlcmd -S "(localdb)\mssqllocaldb" -d AtlasDb -i ..\..\sql\002_SeedData.sql
 ```
 
-### 4. Install and start Azurite (only needed to test file attachments — Del 10)
+### 4. Configure Azure Service Bus (only needed to test real-time notifications — Del 12)
+
+Unlike SQL (LocalDB) and Blob Storage (Azurite, below), Service Bus has no
+first-party local emulator, so Del 12 deliberately uses the same real Azure
+namespace for local development that Azure itself would use — see the doc
+comment on `AddMessaging` in `Atlas.Infrastructure/DependencyInjection.cs`
+for the full reasoning. To test `POST /api/tickets/{id}/assign` publishing a
+`TicketAssigned` event and `Atlas.Worker` picking it up:
+
+1. You need a Service Bus namespace on the **Standard** tier or above (the
+   free Basic tier doesn't support Topics). Set
+   `ServiceBus:FullyQualifiedNamespace` in `appsettings.Development.json`
+   (both `Atlas.Api` and `Atlas.Worker`) to yours, e.g.
+   `<your-namespace>.servicebus.windows.net`.
+2. Create the topic and subscription this project expects:
+
+   ```bash
+   az servicebus topic create --resource-group <rg> --namespace-name <namespace> \
+     --name atlas-ticket-events --enable-duplicate-detection true \
+     --duplicate-detection-history-time-window PT10M
+
+   az servicebus topic subscription create --resource-group <rg> \
+     --namespace-name <namespace> --topic-name atlas-ticket-events \
+     --name atlas-notifications
+   ```
+
+3. Log in locally via `az login`, then grant your own Azure AD identity the
+   "Azure Service Bus Data Owner" role on the namespace (covers both send
+   and receive, which is all that's needed for local testing where both
+   `Atlas.Api` and `Atlas.Worker` run as you):
+
+   ```bash
+   namespaceId=$(az servicebus namespace show --resource-group <rg> --name <namespace> --query id -o tsv)
+   myId=$(az ad signed-in-user show --query id -o tsv)
+   az role assignment create --assignee "$myId" --role "Azure Service Bus Data Owner" --scope "$namespaceId"
+   ```
+
+4. `ServiceBus:ExcludeManagedIdentityCredential: true` is already set in
+   `appsettings.Development.json` — without it, `DefaultAzureCredential`'s
+   managed-identity probe fails in a way that aborts its whole credential
+   chain before it ever tries `az login` locally (see `AddMessaging`'s doc
+   comment for the full story — it's a genuine `Azure.Identity` gotcha, not
+   a Service Bus one).
+
+If you skip this step, every other endpoint still works fine — only the
+event publish on ticket assignment (best-effort: logged and swallowed on
+failure, see `ServiceBusTicketEventPublisher`) and `Atlas.Worker`'s
+`TicketAssignedConsumer` will simply have nothing to talk to.
+
+### 5. Install and start Azurite (only needed to test file attachments — Del 10)
 
 Ticket attachments (`POST /api/tickets/{id}/attachments`) are stored in Azure
 Blob Storage. Locally, that means [Azurite](https://learn.microsoft.com/azure/storage/common/storage-use-azurite) —
@@ -266,7 +318,7 @@ starting in a half-working state. If you don't care about attachments right
 now, you can skip this step entirely — every other endpoint works fine
 without Azurite running; only the two attachment endpoints will fail.
 
-### 5. Run the API
+### 6. Run the API
 
 ```bash
 dotnet run --project src/Atlas.Api
@@ -275,7 +327,7 @@ dotnet run --project src/Atlas.Api
 Swagger UI opens automatically at `https://localhost:5081/swagger` (or
 `http://localhost:5080/swagger`).
 
-### 6. Try it
+### 7. Try it
 
 Every endpoint except `POST /api/auth/register` and `POST /api/auth/login`
 requires a bearer token (see
@@ -414,7 +466,7 @@ curl "https://localhost:5081/api/tickets/<ticket-guid>/attachments/<attachment-g
      -o downloaded-screenshot.png
 ```
 
-### 7. Run the tests
+### 8. Run the tests
 
 ```bash
 dotnet test
@@ -519,10 +571,13 @@ database.
       mostly just "generalize the Key Vault setup, add a least-privilege
       SQL login"
 - [~] **Phase 4 — Enterprise**: Del 11 (background worker for overdue-ticket
-      notifications) confirmed working end-to-end (2026-09-11) — a second
-      host process, `Atlas.Worker` (.NET Generic Host, not ASP.NET Core),
-      polling every 5 minutes and writing to the `Notifications` table
-      through the same `AtlasDb`; Service Bus, Redis and audit logging remain
+      notifications) and Del 12 (Azure Service Bus, real-time
+      `TicketAssigned` notifications) both confirmed working end-to-end
+      (2026-09-11) — a second host process, `Atlas.Worker` (.NET Generic
+      Host, not ASP.NET Core), polls every 5 minutes for overdue tickets
+      *and* consumes Service Bus events `Atlas.Api` publishes on ticket
+      assignment, writing to the same `Notifications` table through
+      `AtlasDb` either way; Redis and audit logging remain
 - [ ] **Phase 5 — Quality**: broader test suite, Docker, structured logging, monitoring
 - [ ] **Phase 6 — DevOps**: Bicep (Infrastructure as Code) — CI/CD itself
       already exists as of Del 8, on Azure Pipelines

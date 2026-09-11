@@ -388,6 +388,116 @@ run in Azure (a Container App Job? a WebJob? Functions with a timer
 trigger? an always-on App Service?) has been decided yet — deliberately
 deferred, the same way Del 20 remains open, rather than guessed at now.
 
+**Del 12 — Azure Service Bus, real-time TicketAssigned notifications.** The
+second Del in Fas 4, and the first time two of this solution's own processes
+talk to each other directly rather than only through the shared `AtlasDb`
+database: `Atlas.Api` publishes a `TicketAssignedEvent` to a Service Bus
+**topic** (`atlas-ticket-events`) the moment `TicketService.AssignAsync`
+successfully assigns a ticket, and `Atlas.Worker` — already running as a
+second host process since Del 11 — now also runs a `TicketAssignedConsumer :
+BackgroundService` that subscribes to it (via the `atlas-notifications`
+**subscription** on that topic) and turns each event into a `Notification`
+row, a second notification-producing path alongside Del 11's overdue-ticket
+check.
+
+A topic-and-subscription, not a queue, on purpose: a queue delivers each
+message to exactly one competing receiver, the right shape when there is one
+kind of consumer doing one job. A topic instead lets any number of
+independent subscriptions each receive their own full copy of every
+message — the right shape here because `TicketAssigned` is a fact about the
+world ("this happened"), not a work item for one specific handler, and a
+future second subscriber (an email-notification service, an analytics
+pipeline) should be able to start listening without `Atlas.Api` changing
+anything about how or where it publishes.
+
+`ITicketEventPublisher`/`ServiceBusTicketEventPublisher`
+(`Atlas.Infrastructure/Messaging`) follow the same "narrow, purpose-built
+interface" rule `ITicketRepository`'s own doc comment established — one
+method scoped to `TicketAssignedEvent` specifically, not a generic
+`PublishAsync<T>(topic, message)` guessed at before there's a second real
+event type to shape it against. `TicketService.AssignAsync` calls it *after*
+`SaveChangesAsync` has already committed the assignment, and the publish
+itself is wrapped in a try/catch that logs a warning and swallows any
+failure — a Service Bus hiccup must never turn an already-successful
+assignment into a failed HTTP response for the caller. There is no outbox
+pattern guaranteeing the event eventually gets published if the process
+crashes in the narrow window between the DB commit and the publish call — a
+known, deliberate gap, not an oversight, the same class of tradeoff Del 10
+already accepted for the orphaned-blob case.
+
+Each `TicketAssignedEvent`'s `EventId` (generated once per publish attempt,
+not once per SDK-internal retry) doubles as the Service Bus message's
+`MessageId`, so the topic's duplicate-detection window (enabled with
+`--enable-duplicate-detection true
+--duplicate-detection-history-time-window PT10M` when the topic is created)
+recognizes a sender-side retry of the *same* publish attempt as a duplicate.
+It does not, and cannot, protect against the *consumer* processing the same
+message twice — Service Bus is at-least-once delivery, not exactly-once —
+see `TicketAssignedConsumer`'s own doc comment for why that stays an open,
+documented gap rather than something Del 12 closes. In practice this
+distinction surfaced immediately during testing, in the most mundane way
+possible: two manual calls to `POST /api/tickets/{id}/assign` against the
+same ticket (a genuine retry by the person testing it, not a network-level
+one) correctly produced two separate `Notification` rows, since each call is
+a real, distinct assignment with its own `EventId` — a useful reminder that
+duplicate detection and "don't do the same real-world thing twice" are
+different guarantees, and only the first one is Service Bus's job.
+
+`DependencyInjection.cs` gained a fourth composable piece, `AddMessaging` —
+unlike `AddBlobStorage`/`AddAuthInfrastructure` (Atlas.Api only), both
+`Atlas.Api` (publishing) and `Atlas.Worker` (consuming) call it, so
+`AddInfrastructure()` (still just chaining all four) needed no changes, and
+`Atlas.Worker`'s `Program.cs` picked up one new line. It registers a
+singleton `ServiceBusClient` — the SDK explicitly documents this type as
+safe, and intended, to share for the app's whole lifetime, the same
+justification `BlobContainerClient` already has (Del 10) — and, unlike every
+other external dependency in this project, there is no local-emulator branch
+at all: SQL got LocalDB and Blob Storage got Azurite (Del 10), but Service
+Bus has no first-party local emulator, so Del 12 deliberately uses the
+*same* real Azure namespace for local development that production will use
+(`nspl-sb-core-dev-sc`, Peter's existing Standard-tier namespace — reusing
+it rather than provisioning a new one costs nothing extra, since Service
+Bus's ~$10/month fee is per namespace, not per topic). That makes this the
+first piece of infrastructure in the whole project where
+`DefaultAzureCredential` gets exercised locally at all — SQL uses a plain
+connection string, Blob Storage uses Azurite's fixed well-known key, and Key
+Vault isn't touched by `Atlas.Worker` at all.
+
+Getting that working locally surfaced a genuine `Azure.Identity` gotcha, not
+a Service Bus one: every local run failed with `AuthenticationFailedException:
+ManagedIdentityCredential authentication failed: ... 169.254.169.254 ...`,
+even after the right RBAC role (`Azure Service Bus Data Owner`, granted to
+Peter's own Azure AD identity via `az login`) was already in place.
+`DefaultAzureCredential` tries a fixed chain of credential sources and only
+moves on to the next one when a source throws
+`CredentialUnavailableException` — its "I don't apply here" signal. Locally
+there genuinely is no managed identity, so `ManagedIdentityCredential`
+*should* say exactly that and let the chain fall through to
+`AzureCliCredential` (the one that would actually work, via `az login`). In
+practice, its IMDS probe tries to reach 169.254.169.254 — an address that
+only resolves inside a real Azure VM/App Service — and on a machine where
+that address is genuinely unreachable rather than merely refused, the probe
+exhausts its retries and throws `AuthenticationFailedException` instead,
+which `DefaultAzureCredential` treats as a hard stop for the *entire* chain
+rather than "try the next source": `AzureCliCredential` never even gets a
+turn. The fix, in `AddMessaging`: a config-driven
+`ServiceBus:ExcludeManagedIdentityCredential` flag, `true` only in
+`appsettings.Development.json` — the same "a plain config key, not an
+environment-name check, decides the local/Azure difference" idiom
+`AddBlobStorage` already uses for `ConnectionString` vs. `AccountUrl`. With
+it excluded locally, `AzureCliCredential` gets its turn and everything
+works; in Azure, where the flag is absent, `ManagedIdentityCredential` stays
+in the chain for when `Atlas.Api`'s own managed identity is eventually
+granted a Service Bus role there too (not yet done — see "Current known
+simplifications" below).
+
+**Confirmed working end-to-end locally on 2026-09-11**: `POST
+/api/tickets/{id}/assign` published a `TicketAssignedEvent`,
+`Atlas.Worker`'s `TicketAssignedConsumer` received it and wrote a matching
+`Notification` row (`Type = TicketAssigned`), verified via `sqlcmd` —
+alongside the mundane duplicate-notification finding described above, which
+turned out to demonstrate correct behaviour rather than a bug.
+
 ## Current known simplifications (by design)
 
 - Azure SQL (Del 9) reuses Peter's existing SQL login for the moment — the
@@ -407,15 +517,28 @@ deferred, the same way Del 20 remains open, rather than guessed at now.
   real deployment would replace with an invite flow or a
   default-to-Customer policy before going anywhere near production.
 - `Notification` has been written to since Del 11 (the overdue-ticket
-  background worker); `AuditLog` still has nothing writing to it — that's
-  Del 12's Service Bus consumers.
+  background worker) and now Del 12 (`TicketAssigned` events via Service
+  Bus); `AuditLog` still has nothing writing to it — a good candidate for a
+  future Del.
+- `TicketAssignedConsumer` (Del 12) has no protection against Service Bus's
+  at-least-once delivery redelivering the same message and creating a
+  second `Notification` row — closing that gap would mean keying off each
+  event's `EventId` (not currently stored on `Notification`), the same kind
+  of guard `GetNotifiedTicketIdsAsync` already gives Del 11's overdue-ticket
+  path against its own, different kind of duplicate.
+- Del 12's Service Bus RBAC role (`Azure Service Bus Data Owner`) is granted
+  to Peter's own Azure AD identity for local development only —
+  `Atlas.Api`'s Azure App Service managed identity has not yet been granted
+  a Service Bus role there, so publishing from the deployed API doesn't work
+  yet.
 - `Atlas.Worker` (Del 11) only runs locally so far — it isn't deployed
   anywhere in Azure yet. *How* it should run there (a Container App Job on a
   schedule, a WebJob alongside the existing App Service, Azure Functions with
   a timer trigger, or its own always-on App Service) is a deliberate open
   question, not an oversight — the same "get it right locally first, decide
   the Azure hosting shape as its own step" order Del 8/9/10 already followed
-  for `Atlas.Api` itself.
+  for `Atlas.Api` itself. Del 12's Service Bus consumer inherits the same
+  open question, since it lives inside `Atlas.Worker`.
 - Ticket hard-delete (`TicketService.DeleteAsync`) cascades `Attachment` rows
   away via the configured `OnDelete(DeleteBehavior.Cascade)`, but doesn't
   clean up the matching blobs in Storage the other direction — a theoretical

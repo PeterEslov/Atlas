@@ -1,9 +1,11 @@
 using Atlas.Application.Common.Interfaces;
+using Atlas.Infrastructure.Messaging;
 using Atlas.Infrastructure.Persistence;
 using Atlas.Infrastructure.Repositories;
 using Atlas.Infrastructure.Security;
 using Atlas.Infrastructure.Storage;
 using Azure.Identity;
+using Azure.Messaging.ServiceBus;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
 using Microsoft.EntityFrameworkCore;
@@ -16,17 +18,19 @@ namespace Atlas.Infrastructure;
 /// Composition root for the infrastructure layer. Called once from Atlas.Api's
 /// Program.cs — nothing outside this file should new up a DbContext or repository.
 ///
-/// Split into three composable pieces (Del 11) rather than one monolithic
-/// AddInfrastructure: Atlas.Api needs all three (persistence, blob storage,
-/// auth), but Atlas.Worker — a second host process that only ever reads
-/// tickets and writes notifications — needs just AddPersistence. Before this
-/// split, giving the worker anything at all meant calling the full
+/// Split into four composable pieces (Del 11 split off three; Del 12 added
+/// the fourth) rather than one monolithic AddInfrastructure: Atlas.Api needs
+/// all four (persistence, blob storage, auth, messaging), but Atlas.Worker —
+/// a second host process that reads tickets, writes notifications, and now
+/// also consumes Service Bus events — needs only AddPersistence and
+/// AddMessaging, never Blob Storage or JWT auth. Before the Del 11 split,
+/// giving the worker anything at all meant calling the full
 /// AddInfrastructure(), which would have forced it to also carry
-/// BlobStorage:*/Jwt:* configuration (and crash at startup without it,
-/// per the fail-fast checks below) for two systems it never touches.
+/// BlobStorage:*/Jwt:* configuration (and crash at startup without it, per
+/// the fail-fast checks below) for systems it never touches.
 /// AddInfrastructure itself is unchanged from Atlas.Api's point of view — it
 /// still wires up everything, in the same order, so Program.cs there needed
-/// no changes at all.
+/// no changes at all when Del 12 added AddMessaging to the list either.
 /// </summary>
 public static class DependencyInjection
 {
@@ -35,6 +39,7 @@ public static class DependencyInjection
         services.AddPersistence(configuration);
         services.AddBlobStorage(configuration);
         services.AddAuthInfrastructure(configuration);
+        services.AddMessaging(configuration);
 
         return services;
     }
@@ -145,6 +150,97 @@ public static class DependencyInjection
         services.Configure<JwtSettings>(configuration.GetSection(JwtSettings.SectionName));
         services.AddSingleton<IPasswordHasher, Pbkdf2PasswordHasher>();
         services.AddScoped<IJwtTokenGenerator, JwtTokenGenerator>();
+
+        return services;
+    }
+
+    /// <summary>
+    /// Azure Service Bus (Del 12) — publishing from Atlas.Api and, once
+    /// TicketAssignedConsumer is registered, consuming from Atlas.Worker.
+    /// Both hosts call this, unlike AddBlobStorage/AddAuthInfrastructure
+    /// above, which only Atlas.Api needs.
+    ///
+    /// Unlike every other external dependency in this project (SQL, Blob
+    /// Storage), there is no local-emulator branch here at all: Del 10 and
+    /// Del 11 each got a free local emulator (LocalDB, Azurite) that speaks
+    /// the real wire protocol, but Service Bus has no first-party local
+    /// emulator, so — per the explicit choice made for Del 12 — local
+    /// development talks to the *same* real Azure namespace production will
+    /// use, rather than an in-process fake queue that would only prove the
+    /// code compiles, not that publish/consume actually works.
+    ///
+    /// That means DefaultAzureCredential gets exercised locally for the
+    /// first time in this project: SQL uses a connection string, Blob
+    /// Storage uses Azurite's fixed well-known key locally, and Key Vault
+    /// isn't touched by Atlas.Worker at all — so this is the first piece of
+    /// infrastructure where "run it on your own machine" requires an actual
+    /// Azure AD identity. Locally, DefaultAzureCredential falls back through
+    /// its credential chain to whatever `az login` already set up on the
+    /// developer's machine; in Azure, it will instead pick up Atlas.Api's
+    /// system-assigned managed identity, the same pattern Blob Storage
+    /// already uses. Either identity still needs an explicit RBAC role
+    /// assignment on the namespace/topic before any send or receive call
+    /// will succeed — "Azure Service Bus Data Sender" for Atlas.Api,
+    /// "Data Receiver" (or "Data Owner", covering both) for Atlas.Worker —
+    /// see docs/AZURE_DEPLOYMENT.md section 9. Authentication succeeding is
+    /// not the same as authorization succeeding; a missing role assignment
+    /// surfaces as an Unauthorized error from the SDK at send/receive time,
+    /// not at startup.
+    ///
+    /// The ServiceBusClient itself is a singleton (like BlobContainerClient
+    /// above) — it manages its own AMQP connection pool internally and is
+    /// explicitly documented by the SDK as safe, and intended, to be shared
+    /// for the lifetime of the app rather than constructed per request.
+    /// </summary>
+    public static IServiceCollection AddMessaging(this IServiceCollection services, IConfiguration configuration)
+    {
+        var fullyQualifiedNamespace = configuration["ServiceBus:FullyQualifiedNamespace"]
+            ?? throw new InvalidOperationException(
+                "Configuration value 'ServiceBus:FullyQualifiedNamespace' was not found. Set it in " +
+                "appsettings.Development.json to 'nspl-sb-core-dev-sc.servicebus.windows.net' (see " +
+                "docs/AZURE_DEPLOYMENT.md section 9) — the same value is used in Azure, since Del 12 " +
+                "deliberately has no separate local-emulator path (see the class doc comment above).");
+
+        // ServiceBus:ExcludeManagedIdentityCredential — set to true only in
+        // appsettings.Development.json, absent (so defaults to false) in
+        // appsettings.json — the same "a plain config key decides the
+        // environment-specific behaviour" idiom AddBlobStorage above uses
+        // (ConnectionString present vs. AccountUrl present), rather than
+        // branching on an environment name.
+        //
+        // Why this is needed: DefaultAzureCredential tries a fixed chain of
+        // credential sources in order, and only moves on to the next one
+        // when a source throws CredentialUnavailableException — its way of
+        // saying "I don't apply here, keep going". Locally, there IS no
+        // managed identity, so in principle ManagedIdentityCredential should
+        // say exactly that and let the chain fall through to
+        // AzureCliCredential (which is what actually authenticates as you,
+        // via `az login`). In practice, the SDK's managed-identity probe
+        // tries to reach the Instance Metadata Service at 169.254.169.254 —
+        // an address that only exists inside an actual Azure VM/App
+        // Service — and on a machine where that address is simply
+        // unreachable (not "refused", genuinely unreachable), the probe
+        // exhausts its retries and throws AuthenticationFailedException
+        // instead of CredentialUnavailableException. DefaultAzureCredential
+        // treats that as a hard failure of the whole chain, not a "try the
+        // next source" signal — so AzureCliCredential never even gets a
+        // turn, and every local run fails with exactly the
+        // "ManagedIdentityCredential authentication failed: ... 169.254.169.254
+        // ..." error this project hit. Excluding ManagedIdentityCredential
+        // outright when running locally (where it could never succeed
+        // anyway) sidesteps the slow, doomed probe entirely. In Azure,
+        // where Atlas.Api's system-assigned managed identity is the whole
+        // point, the flag is absent and it stays in the chain.
+        var excludeManagedIdentity = configuration.GetValue<bool>("ServiceBus:ExcludeManagedIdentityCredential");
+        var credential = new DefaultAzureCredential(new DefaultAzureCredentialOptions
+        {
+            ExcludeManagedIdentityCredential = excludeManagedIdentity,
+        });
+
+        var serviceBusClient = new ServiceBusClient(fullyQualifiedNamespace, credential);
+
+        services.AddSingleton(serviceBusClient);
+        services.AddScoped<ITicketEventPublisher, ServiceBusTicketEventPublisher>();
 
         return services;
     }

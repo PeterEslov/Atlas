@@ -2,6 +2,7 @@ using Atlas.Application.Common.Exceptions;
 using Atlas.Application.Common.Interfaces;
 using Atlas.Application.Common.Models;
 using Atlas.Application.Tickets.Dtos;
+using Atlas.Application.Tickets.Events;
 using Atlas.Domain.Entities;
 using Microsoft.Extensions.Logging;
 
@@ -18,13 +19,15 @@ public sealed class TicketService : ITicketService
     private readonly ITicketRepository _ticketRepository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly IBlobStorageService _blobStorageService;
+    private readonly ITicketEventPublisher _ticketEventPublisher;
     private readonly ILogger<TicketService> _logger;
 
-    public TicketService(ITicketRepository ticketRepository, IUnitOfWork unitOfWork, IBlobStorageService blobStorageService, ILogger<TicketService> logger)
+    public TicketService(ITicketRepository ticketRepository, IUnitOfWork unitOfWork, IBlobStorageService blobStorageService, ITicketEventPublisher ticketEventPublisher, ILogger<TicketService> logger)
     {
         _ticketRepository = ticketRepository;
         _unitOfWork = unitOfWork;
         _blobStorageService = blobStorageService;
+        _ticketEventPublisher = ticketEventPublisher;
         _logger = logger;
     }
 
@@ -69,6 +72,23 @@ public sealed class TicketService : ITicketService
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         _logger.LogInformation("Ticket {TicketId} assigned to user {AssignedUserId} by {ActorUserId}", ticketId, request.UserId, actorUserId);
+
+        // Published *after* SaveChangesAsync above has already committed the
+        // assignment — see the doc comment on ServiceBusTicketEventPublisher
+        // for why a Service Bus hiccup here must never turn into a failed
+        // response for an assignment that, as far as the database is
+        // concerned, already succeeded. EventId is generated fresh per call
+        // (not reused across retries of this HTTP request), matching what
+        // TicketAssignedEvent's own doc comment says it's for.
+        var @event = new TicketAssignedEvent(
+            Guid.NewGuid(),
+            ticket.Id,
+            ticket.Title,
+            request.UserId,
+            actorUserId,
+            DateTime.UtcNow);
+        await _ticketEventPublisher.PublishTicketAssignedAsync(@event, cancellationToken);
+
         return ToDetailDto(ticket);
     }
 

@@ -41,6 +41,14 @@
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
 
     <!--
+      Service Bus for the TicketAssigned event (Del 12) — see
+      ServiceBusTicketEventPublisher and the "Service Bus" block in
+      DependencyInjection.AddMessaging. Authenticated the same way as
+      Blob Storage above: DefaultAzureCredential, no connection string.
+    -->
+    <PackageReference Include="Azure.Messaging.ServiceBus" Version="7.20.2" />
+
+    <!--
       Explicit override for NU1903 (CVE-2026-50648, GHSA-23rf-6693-g89p): one of
       the packages above pulls in System.Security.Cryptography.Xml 9.0.0
       transitively, which is below the patched floor for both the 9.x line

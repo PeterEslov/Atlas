@@ -16,12 +16,20 @@ var builder = Host.CreateApplicationBuilder(args);
 // tables, not a database of its own.
 builder.Services.AddPersistence(builder.Configuration);
 
+// Service Bus (Del 12) — this worker only consumes (TicketAssignedConsumer
+// below), it never publishes, but AddMessaging registers the same singleton
+// ServiceBusClient either side needs; there's no separate "consumer-only"
+// variant since a ServiceBusClient itself doesn't distinguish sender from
+// receiver, only the CreateSender/CreateProcessor call on it does.
+builder.Services.AddMessaging(builder.Configuration);
+
 builder.Services.AddScoped<IOverdueTicketNotificationService, OverdueTicketNotificationService>();
 
 builder.Services.Configure<OverdueTicketWorkerOptions>(
     builder.Configuration.GetSection(OverdueTicketWorkerOptions.SectionName));
 
 builder.Services.AddHostedService<OverdueTicketWorker>();
+builder.Services.AddHostedService<TicketAssignedConsumer>();
 
 var host = builder.Build();
 host.Run();
