@@ -93,6 +93,27 @@ public sealed class TicketRepository : ITicketRepository
         return (items, totalCount);
     }
 
+    public async Task<IReadOnlyList<Ticket>> GetOverdueAsync(CancellationToken cancellationToken)
+    {
+        // Same overdue definition as Ticket.IsOverdue (the domain property)
+        // and SearchAsync's OverdueOnly filter — a due date in the past that
+        // hasn't been closed out yet. Re-expressed as a query here (rather
+        // than loading every ticket and filtering in memory against
+        // IsOverdue) because that's the whole point of a database: this runs
+        // as a single indexed query, not "download the table".
+        var now = DateTime.UtcNow;
+
+        return await _dbContext.Tickets
+            .AsNoTracking()
+            .Where(t => t.DueAtUtc != null
+                && t.DueAtUtc < now
+                && t.AssignedToUserId != null
+                && t.Status != Domain.Enums.TicketStatus.Resolved
+                && t.Status != Domain.Enums.TicketStatus.Closed
+                && t.Status != Domain.Enums.TicketStatus.Cancelled)
+            .ToListAsync(cancellationToken);
+    }
+
     public async Task AddAsync(Ticket ticket, CancellationToken cancellationToken)
     {
         await _dbContext.Tickets.AddAsync(ticket, cancellationToken);

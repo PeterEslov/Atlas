@@ -15,6 +15,7 @@ EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{96CB0D47-ECA6-44B3-93BD-64F7BFE681DB}"
 	ProjectSection(SolutionItems) = preProject
 		docs\ARCHITECTURE.md = docs\ARCHITECTURE.md
+		docs\AZURE_DEPLOYMENT.md = docs\AZURE_DEPLOYMENT.md
 	EndProjectSection
 EndProject
 Global

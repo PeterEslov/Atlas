@@ -16,6 +16,16 @@ public interface ITicketRepository
 
     Task<(IReadOnlyList<Ticket> Items, int TotalCount)> SearchAsync(TicketListQuery query, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Every ticket that is currently overdue (a past due date, not yet
+    /// Resolved/Closed/Cancelled) AND assigned to someone — an unassigned
+    /// ticket has nobody to notify, so it's filtered out here rather than by
+    /// the caller. Used by Del 11's background worker; deliberately not
+    /// paginated like SearchAsync is, since a batch job needs the complete
+    /// set every time, not a UI page of it.
+    /// </summary>
+    Task<IReadOnlyList<Ticket>> GetOverdueAsync(CancellationToken cancellationToken);
+
     Task AddAsync(Ticket ticket, CancellationToken cancellationToken);
 
     /// <summary>

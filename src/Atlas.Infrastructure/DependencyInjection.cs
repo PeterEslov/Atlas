@@ -15,10 +15,36 @@ namespace Atlas.Infrastructure;
 /// <summary>
 /// Composition root for the infrastructure layer. Called once from Atlas.Api's
 /// Program.cs — nothing outside this file should new up a DbContext or repository.
+///
+/// Split into three composable pieces (Del 11) rather than one monolithic
+/// AddInfrastructure: Atlas.Api needs all three (persistence, blob storage,
+/// auth), but Atlas.Worker — a second host process that only ever reads
+/// tickets and writes notifications — needs just AddPersistence. Before this
+/// split, giving the worker anything at all meant calling the full
+/// AddInfrastructure(), which would have forced it to also carry
+/// BlobStorage:*/Jwt:* configuration (and crash at startup without it,
+/// per the fail-fast checks below) for two systems it never touches.
+/// AddInfrastructure itself is unchanged from Atlas.Api's point of view — it
+/// still wires up everything, in the same order, so Program.cs there needed
+/// no changes at all.
 /// </summary>
 public static class DependencyInjection
 {
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
+    {
+        services.AddPersistence(configuration);
+        services.AddBlobStorage(configuration);
+        services.AddAuthInfrastructure(configuration);
+
+        return services;
+    }
+
+    /// <summary>
+    /// The DbContext, the unit of work, and every repository. This is the one
+    /// piece every host (Atlas.Api, Atlas.Worker) needs, since both ultimately
+    /// just read and write rows in AtlasDb.
+    /// </summary>
+    public static IServiceCollection AddPersistence(this IServiceCollection services, IConfiguration configuration)
     {
         var connectionString = configuration.GetConnectionString("AtlasDb")
             ?? throw new InvalidOperationException(
@@ -41,12 +67,19 @@ public static class DependencyInjection
         services.AddScoped<IProjectRepository, ProjectRepository>();
         services.AddScoped<ITeamRepository, TeamRepository>();
 
-        services.Configure<JwtSettings>(configuration.GetSection(JwtSettings.SectionName));
-        services.AddSingleton<IPasswordHasher, Pbkdf2PasswordHasher>();
-        services.AddScoped<IJwtTokenGenerator, JwtTokenGenerator>();
+        // Notifications (Del 11) — the first thing to actually read/write the
+        // Notifications table, which has existed in the schema since Fas 1.
+        services.AddScoped<INotificationRepository, NotificationRepository>();
 
-        // ---- Blob Storage (Del 10) --------------------------------------------
-        //
+        return services;
+    }
+
+    /// <summary>
+    /// Azure Blob Storage for ticket attachments (Del 10). Only Atlas.Api needs
+    /// this — nothing else in the solution uploads or downloads a file.
+    /// </summary>
+    public static IServiceCollection AddBlobStorage(this IServiceCollection services, IConfiguration configuration)
+    {
         // Same dual-path shape as the AtlasDb connection string above, for the
         // same reason: BlobStorage:ConnectionString means local development
         // against Azurite (a free, Microsoft-official emulator that speaks the
@@ -92,13 +125,26 @@ public static class DependencyInjection
         // Idempotent and synchronous on purpose: this runs once, here, during
         // startup composition (before the app accepts any requests), so there's
         // no async context to await into and no harm in it being a no-op on every
-        // run after the container already exists. PublicAccessType.None means the
-        // container itself grants no anonymous access — every download still goes
-        // through TicketsController, which enforces Permissions.TicketRead.
+        // run after the container already exists. PublicAccessType.None means
+        // the container itself grants no anonymous access — every download still
+        // goes through TicketsController, which enforces Permissions.TicketRead.
         blobContainerClient.CreateIfNotExists(PublicAccessType.None);
 
         services.AddSingleton(blobContainerClient);
         services.AddScoped<IBlobStorageService, AzureBlobStorageService>();
+
+        return services;
+    }
+
+    /// <summary>
+    /// JWT issuance and password hashing (Del 5). Only Atlas.Api authenticates
+    /// anyone — Atlas.Worker never issues or validates a token.
+    /// </summary>
+    public static IServiceCollection AddAuthInfrastructure(this IServiceCollection services, IConfiguration configuration)
+    {
+        services.Configure<JwtSettings>(configuration.GetSection(JwtSettings.SectionName));
+        services.AddSingleton<IPasswordHasher, Pbkdf2PasswordHasher>();
+        services.AddScoped<IJwtTokenGenerator, JwtTokenGenerator>();
 
         return services;
     }

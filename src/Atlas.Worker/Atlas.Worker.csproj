@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Atlas.Worker</RootNamespace>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Atlas.Application for IOverdueTicketNotificationService, Atlas.Infrastructure
+      for AddPersistence (Del 11 — see DependencyInjection.cs for why this worker
+      calls AddPersistence directly rather than the full AddInfrastructure() that
+      Atlas.Api uses: it never touches Blob Storage or issues a JWT, so it has no
+      reason to require that configuration too).
+    -->
+    <ProjectReference Include="..\Atlas.Application\Atlas.Application.csproj" />
+    <ProjectReference Include="..\Atlas.Infrastructure\Atlas.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.0" />
+  </ItemGroup>
+
+</Project>
