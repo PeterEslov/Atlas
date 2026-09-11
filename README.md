@@ -504,17 +504,17 @@ database.
       Organizations & Users management (Del 6), Projects & Teams management
       and the richer ticket workflows (reopen, tag by name, filter by project,
       real hard-delete) that closed out Del 7
-- [~] **Phase 3 — Azure**: Del 8 and Del 9 both confirmed working
-      end-to-end against the live subscription (2026-09-10) — App Service +
-      Azure Pipelines CI/CD pipeline (Azure DevOps), JWT signing key *and*
-      the Azure SQL connection string in Key Vault (both pulled forward
-      from Del 20 — see `docs/AZURE_DEPLOYMENT.md`), `POST /api/auth/register`
-      returning a real JWT through App Service against a live Azure SQL
-      database. Del 10 (Blob Storage for attachments) is in progress: the
-      code is written (`IBlobStorageService`, the two attachment endpoints,
-      Azurite for local dev — see step 4 above), not yet verified locally
-      or deployed. Del 20 is now mostly just "generalize the Key Vault
-      setup, add a least-privilege SQL login"
+- [~] **Phase 3 — Azure**: Del 8, Del 9 and Del 10 all confirmed working
+      end-to-end against the live subscription (2026-09-10/11) — App Service +
+      Azure Pipelines CI/CD pipeline (Azure DevOps), JWT signing key, the
+      Azure SQL connection string, *and* the Blob Storage account URL all
+      resolved via the same managed-identity/Key Vault or plain-App-Setting
+      pattern (see `docs/AZURE_DEPLOYMENT.md`); `POST /api/auth/register`/
+      `/login` returning a real JWT through App Service against a live Azure
+      SQL database, and `POST /api/tickets/{id}/attachments` uploading to
+      and downloading from a real Azure Storage account. Del 20 is now
+      mostly just "generalize the Key Vault setup, add a least-privilege
+      SQL login"
 - [ ] **Phase 4 — Enterprise**: Service Bus, background worker, Redis, audit logging
 - [ ] **Phase 5 — Quality**: broader test suite, Docker, structured logging, monitoring
 - [ ] **Phase 6 — DevOps**: Bicep (Infrastructure as Code) — CI/CD itself

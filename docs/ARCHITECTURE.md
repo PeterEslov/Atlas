@@ -192,6 +192,88 @@ connection string like `Server=tcp:.database.windows.net,...` — a host that
 plainly can't resolve — the same "echo the value before you trust it in the
 next command" discipline that `MSYS_NO_PATHCONV` debugging already taught.
 
+**Del 10 — Azure Blob Storage, attachments.** A third instance of the same
+managed-identity-over-stored-secret shape as Key Vault (Del 8) and Azure SQL
+(Del 9), but this time reusing nothing: a brand-new Storage account, since
+knowing exactly which permissions the account needs is simpler when it only
+ever holds this project's attachments. `IBlobStorageService`
+(Atlas.Application) is implemented by `AzureBlobStorageService`
+(Atlas.Infrastructure) against a `BlobContainerClient` that's constructed one
+of two ways — `BlobStorage:ConnectionString` (Azurite, local dev) or
+`BlobStorage:AccountUrl` + `DefaultAzureCredential` (Azure, via the App
+Service's managed identity granted "Storage Blob Data Contributor" RBAC on
+the account) — exactly the dual-path shape `ConnectionStrings:AtlasDb`
+already has. Unlike the SQL connection string and the JWT signing key, the
+account URL isn't itself a secret (nothing can be done with it without an
+Azure AD identity Azure also trusts), so it's a plain App Setting
+(`BlobStorage__AccountUrl`), the same reasoning `KeyVault:Name` already
+follows — not every piece of cloud configuration needs Key Vault, only the
+pieces that are actually secrets. `AddInfrastructure` also calls
+`blobContainerClient.CreateIfNotExists(PublicAccessType.None)`
+synchronously at startup, the same fail-fast idea as the `Jwt:SigningKey`
+null-check in `Program.cs`: a missing or unreachable container should crash
+the app immediately with a clear error, not serve requests in a half-working
+state. `TicketService.AddAttachmentAsync` uploads the blob *before* creating
+the `Attachment` row (with a best-effort compensating blob delete if the
+DB write then fails) rather than the other order, because an orphaned blob
+nobody points to is a far cheaper failure than a DB row whose `BlobName`
+points at nothing — a broken download for a real user.
+
+Getting there surfaced a genuine EF Core bug, not an Azure one:
+`TicketService.AddAttachmentAsync` deterministically threw
+`DbUpdateConcurrencyException: expected to affect 1 row(s), but actually
+affected 0 row(s)` on every attachment upload, both locally and later in
+Azure. The SQL Peter captured from the console log showed why — EF Core had
+generated an `UPDATE` for the brand-new `Attachment` row instead of an
+`INSERT`. Every other child entity on `Ticket` (`TicketComment`,
+`TicketHistory`, `TicketTag`) is added purely by appending to the
+aggregate's own in-memory collection and letting EF's change tracker infer
+`EntityState.Added` for the newly-discovered row via `DetectChanges()` — no
+explicit `Add()` call anywhere. That inference is inherently a guess for an
+entity with a client-generated key (every entity here uses a `Guid` set in
+its constructor, not a database-generated one): EF has to decide whether a
+newly-discovered graph member is a brand-new row or an existing one just
+being reattached, and for `Attachment` — the one call path with an `await`
+to an external system (the blob upload) sitting between loading the tracked
+`Ticket` and saving — that guess came out wrong. The fix was to stop relying
+on the guess: `TicketRepository` gained an explicit
+`AddAttachmentAsync(Attachment)` that calls
+`_dbContext.Attachments.AddAsync(...)` directly, the same explicit-staging
+pattern `Ticket` (`TicketRepository.AddAsync`) and `Tag`
+(`GetOrCreateTagAsync`) already used — removing the ambiguity outright
+rather than depending on it resolving correctly by chance.
+
+A second, unrelated-to-EF lesson showed up right after: the Azure Pipelines
+build broke with `error CS0246: The type or namespace name 'AttachmentDto'
+could not be found`, even though everything built and ran fine locally.
+Cause: `TicketsController.cs` (referencing `AttachmentDto`) had already been
+committed and pushed in an earlier commit, but `TicketDtos.cs` (defining it)
+had only ever been written to Peter's working copy — never `git add`ded,
+so it sat as an uncommitted local change while CI cloned a fresh copy of
+`origin/main` that simply didn't have it yet. A clean illustration of why
+CI exists at all: a local build only ever proves the code on disk compiles,
+never that what's actually shared (committed *and* pushed) does. Committing
+the full batch of pending Del 10 files fixed it — after first excluding
+`.azurite/` (Azurite's own local emulator data, now `.gitignore`d, the same
+"don't commit runtime state" reasoning as a LocalDB `.mdf` file) and a stray
+manual test-download artifact that had ended up inside `src/Atlas.Api/`.
+
+**Confirmed working end-to-end against the live subscription on
+2026-09-11**: `POST /api/tickets/{id}/attachments` and the matching
+`GET .../download` both round-tripped a real file through App Service →
+managed identity → the Storage account, verified locally against Azurite
+first and then again against Azure. Getting a token for the Azure
+verification also surfaced a one-off, self-resolving hiccup worth knowing
+about rather than fixing: `POST /api/auth/login` 500'd on the first attempt
+against a database that had been sitting idle since Del 9's testing, then
+succeeded immediately on retry — consistent with Azure SQL serverless
+auto-pause needing a few seconds to wake the database on first contact,
+longer than whatever timeout tripped first. `EnableRetryOnFailure` doesn't
+help here specifically because a cold-start delay isn't the kind of
+mid-operation transient fault it's built to retry — nothing to fix, just
+the cost of `--auto-pause-delay 60` doing its job of not billing for an idle
+database.
+
 ## Current known simplifications (by design)
 
 - Azure SQL (Del 9) reuses Peter's existing SQL login for the moment — the
@@ -213,14 +295,22 @@ next command" discipline that `MSYS_NO_PATHCONV` debugging already taught.
 - `AuditLog` and `Notification` tables exist in the schema but nothing
   writes to them yet — they're wired up in Phase 4 (Del 11's overdue-ticket
   background worker and Del 12's Service Bus consumers).
-- `Attachment.BlobName` is a plain string column; there is no upload
-  endpoint yet. Phase 3 (Del 10) adds Azure Blob Storage and the upload flow.
+- Ticket hard-delete (`TicketService.DeleteAsync`) cascades `Attachment` rows
+  away via the configured `OnDelete(DeleteBehavior.Cascade)`, but doesn't
+  clean up the matching blobs in Storage the other direction — a theoretical
+  mirror image of the orphaned-blob case `AddAttachmentAsync`'s compensating
+  delete already guards against (see Del 10 above), just not something
+  normal application use triggers today. `DownloadAttachmentAsync` logs a
+  warning and returns 404 if it ever encounters a DB row with no matching
+  blob, rather than throwing — there is genuinely nothing to download.
 - The JWT signing key and the Azure SQL connection string both live in
   `appsettings.Development.json` / user-secrets locally, and as Azure Key
   Vault secrets once deployed (`Jwt--SigningKey` since Del 8,
   `ConnectionStrings--AtlasDb` since Del 9 — both pulled forward from
-  Del 20, since a vault was already available). Phase 3 (Del 20) is now
-  mostly about generalizing this — e.g. moving it off a pre-existing vault
-  and onto one provisioned as part of the project's own IaC, and replacing
-  the reused server-admin SQL login with a narrower one scoped to just
-  `AtlasDb` — rather than introducing Key Vault from scratch.
+  Del 20, since a vault was already available); the Blob Storage account URL
+  (`BlobStorage__AccountUrl`, Del 10) is a plain App Setting instead, since
+  unlike those two it isn't actually a secret. Phase 3 (Del 20) is now
+  mostly about generalizing the Key Vault half of this — e.g. moving it off
+  a pre-existing vault and onto one provisioned as part of the project's own
+  IaC, and replacing the reused server-admin SQL login with a narrower one
+  scoped to just `AtlasDb` — rather than introducing Key Vault from scratch.
