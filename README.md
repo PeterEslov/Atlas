@@ -115,11 +115,11 @@ Principle, not just a folder convention.
 - xUnit for domain unit tests
 - Swagger / OpenAPI (ASP.NET Core's built-in generator + Swashbuckle UI)
 
-Planned for later phases (see [Roadmap](#roadmap)): Azure Entra ID, Azure
-Blob Storage, Azure Service Bus, a background worker, Redis, Application
-Insights, Docker, Bicep, and a React frontend. (Key Vault and a CI/CD
-pipeline are already in place as of Del 8 — see below — pulled forward
-rather than left for later.)
+Planned for later phases (see [Roadmap](#roadmap)): Azure Service Bus, a
+background worker, Redis, Application Insights, Docker, Bicep, and a React
+frontend. (Key Vault and a CI/CD pipeline are already in place as of Del 8,
+and Azure SQL and Blob Storage as of Del 9/10 — see below — all pulled
+forward rather than left for later.)
 
 ## Project structure
 
