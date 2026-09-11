@@ -98,6 +98,18 @@ public sealed class TicketRepository : ITicketRepository
         await _dbContext.Tickets.AddAsync(ticket, cancellationToken);
     }
 
+    public async Task AddAttachmentAsync(Attachment attachment, CancellationToken cancellationToken)
+    {
+        // See the doc comment on ITicketRepository.AddAttachmentAsync: this is
+        // an explicit Add() specifically because leaving Attachment to be
+        // discovered implicitly (the way TicketComment/TicketHistory/TicketTag
+        // are) was producing a DbUpdateConcurrencyException. AddAsync (not the
+        // synchronous Add) purely to match the style already used for Ticket
+        // and Tag above — Attachment's Guid key is already set by the time we
+        // get here, so there's no actual database round-trip happening either way.
+        await _dbContext.Attachments.AddAsync(attachment, cancellationToken);
+    }
+
     public void Update(Ticket ticket)
     {
         // Ticket was loaded from this same DbContext, so EF Core's change tracker

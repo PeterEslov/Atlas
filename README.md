@@ -187,6 +187,9 @@ as a fallback reference.
   an Azure SQL database
 - The EF Core CLI tool: `dotnet tool install --global dotnet-ef` (skip if
   already installed — you clearly have a full SQL/Azure toolchain here)
+- Node.js/npm, only if you want to test file attachments locally (Del 10) —
+  needed for Azurite, see step 4 below. Everything else in this repo builds
+  and runs without it.
 
 ### 1. Restore and build
 
@@ -236,7 +239,31 @@ Optionally load demo data:
 sqlcmd -S "(localdb)\mssqllocaldb" -d AtlasDb -i ..\..\sql\002_SeedData.sql
 ```
 
-### 4. Run the API
+### 4. Install and start Azurite (only needed to test file attachments — Del 10)
+
+Ticket attachments (`POST /api/tickets/{id}/attachments`) are stored in Azure
+Blob Storage. Locally, that means [Azurite](https://learn.microsoft.com/azure/storage/common/storage-use-azurite) —
+a free, Microsoft-official emulator that speaks the real Blob Storage wire
+protocol, the same role LocalDB plays for Azure SQL. It's an npm package, not
+Docker, so no container runtime is needed:
+
+```bash
+npm install -g azurite
+azurite --silent --location ./.azurite --debug ./.azurite/debug.log
+```
+
+Leave that running in its own terminal — `appsettings.Development.json`
+already points `BlobStorage:ConnectionString` at Azurite's well-known local
+endpoint (`UseDevelopmentStorage=true`), so there's nothing else to
+configure. **Start Azurite before `dotnet run`**: the API creates its blob
+container during startup (see `AddInfrastructure` in
+`Atlas.Infrastructure/DependencyInjection.cs`), so if Azurite isn't listening
+yet, `dotnet run` fails immediately with a connection error rather than
+starting in a half-working state. If you don't care about attachments right
+now, you can skip this step entirely — every other endpoint works fine
+without Azurite running; only the two attachment endpoints will fail.
+
+### 5. Run the API
 
 ```bash
 dotnet run --project src/Atlas.Api
@@ -245,7 +272,7 @@ dotnet run --project src/Atlas.Api
 Swagger UI opens automatically at `https://localhost:5081/swagger` (or
 `http://localhost:5080/swagger`).
 
-### 5. Try it
+### 6. Try it
 
 Every endpoint except `POST /api/auth/register` and `POST /api/auth/login`
 requires a bearer token (see
@@ -369,9 +396,22 @@ curl -X POST "https://localhost:5081/api/teams/<team-guid>/members" -k \
 
 curl -X DELETE "https://localhost:5081/api/teams/<team-guid>/members/<agent-guid>" -k \
      -H "Authorization: Bearer $TOKEN"
+
+# Upload an attachment (Del 10 — needs Azurite running, see step 4). Note
+# -F instead of -d/-H Content-Type: this is a multipart/form-data upload,
+# not JSON: the form field name must be "file".
+curl -X POST "https://localhost:5081/api/tickets/<ticket-guid>/attachments" -k \
+     -H "Authorization: Bearer $TOKEN" \
+     -F "file=@screenshot.png"
+
+# Download it back (attachment-guid comes from the upload response's "id",
+# or from GET /api/tickets/<ticket-guid>'s "attachments" list)
+curl "https://localhost:5081/api/tickets/<ticket-guid>/attachments/<attachment-guid>/download" -k \
+     -H "Authorization: Bearer $TOKEN" \
+     -o downloaded-screenshot.png
 ```
 
-### 6. Run the tests
+### 7. Run the tests
 
 ```bash
 dotnet test
@@ -470,8 +510,11 @@ database.
       the Azure SQL connection string in Key Vault (both pulled forward
       from Del 20 — see `docs/AZURE_DEPLOYMENT.md`), `POST /api/auth/register`
       returning a real JWT through App Service against a live Azure SQL
-      database. Blob Storage (Del 10) still to come; Del 20 is now mostly
-      just "generalize the Key Vault setup, add a least-privilege SQL login"
+      database. Del 10 (Blob Storage for attachments) is in progress: the
+      code is written (`IBlobStorageService`, the two attachment endpoints,
+      Azurite for local dev — see step 4 above), not yet verified locally
+      or deployed. Del 20 is now mostly just "generalize the Key Vault
+      setup, add a least-privilege SQL login"
 - [ ] **Phase 4 — Enterprise**: Service Bus, background worker, Redis, audit logging
 - [ ] **Phase 5 — Quality**: broader test suite, Docker, structured logging, monitoring
 - [ ] **Phase 6 — DevOps**: Bicep (Infrastructure as Code) — CI/CD itself

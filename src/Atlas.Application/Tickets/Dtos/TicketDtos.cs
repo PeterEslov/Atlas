@@ -16,7 +16,7 @@ public sealed record TicketDto(
     bool IsOverdue,
     DateTime CreatedAtUtc);
 
-/// <summary>Full shape returned by the "get one" endpoint — includes comments, history and tags.</summary>
+/// <summary>Full shape returned by the "get one" endpoint — includes comments, history, tags and attachments.</summary>
 public sealed record TicketDetailDto(
     Guid Id,
     string Title,
@@ -36,11 +36,24 @@ public sealed record TicketDetailDto(
     DateTime? ModifiedAtUtc,
     IReadOnlyList<TicketCommentDto> Comments,
     IReadOnlyList<TicketHistoryDto> History,
-    IReadOnlyList<string> Tags);
+    IReadOnlyList<string> Tags,
+    IReadOnlyList<AttachmentDto> Attachments);
 
 public sealed record TicketCommentDto(Guid Id, Guid AuthorUserId, string Body, bool IsInternal, DateTime CreatedAtUtc);
 
 public sealed record TicketHistoryDto(Guid Id, Guid ChangedByUserId, string FieldName, string? OldValue, string? NewValue, DateTime ChangedAtUtc);
+
+/// <summary>Metadata returned for an uploaded attachment — never the file bytes themselves; see AttachmentDownload for those.</summary>
+public sealed record AttachmentDto(Guid Id, string FileName, string ContentType, long SizeInBytes, Guid UploadedByUserId, DateTime CreatedAtUtc);
+
+/// <summary>
+/// Returned by ITicketService.DownloadAttachmentAsync — an open, readable stream
+/// plus the metadata the controller needs to set the HTTP response headers
+/// (Content-Type and the download's suggested file name). The controller is
+/// responsible for disposing the stream once it's finished writing it to the
+/// response (ASP.NET Core's FileStreamResult does this automatically).
+/// </summary>
+public sealed record AttachmentDownload(Stream Content, string ContentType, string FileName);
 
 /// <summary>Request body for POST /api/tickets.</summary>
 public sealed record CreateTicketRequest(

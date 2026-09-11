@@ -17,12 +17,14 @@ public sealed class TicketService : ITicketService
 {
     private readonly ITicketRepository _ticketRepository;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly IBlobStorageService _blobStorageService;
     private readonly ILogger<TicketService> _logger;
 
-    public TicketService(ITicketRepository ticketRepository, IUnitOfWork unitOfWork, ILogger<TicketService> logger)
+    public TicketService(ITicketRepository ticketRepository, IUnitOfWork unitOfWork, IBlobStorageService blobStorageService, ILogger<TicketService> logger)
     {
         _ticketRepository = ticketRepository;
         _unitOfWork = unitOfWork;
+        _blobStorageService = blobStorageService;
         _logger = logger;
     }
 
@@ -167,6 +169,85 @@ public sealed class TicketService : ITicketService
         _logger.LogInformation("Ticket {TicketId} permanently deleted", ticketId);
     }
 
+    /// <summary>
+    /// Uploads the file to Blob Storage, then records it as an Attachment. The
+    /// order matters: the blob goes up FIRST, then the domain/DB write happens
+    /// second. Two different systems (Blob Storage, Azure SQL) can't share one
+    /// atomic transaction, so a failure has to land on one side or the other —
+    /// this ordering means a failure ever leaves, at worst, an orphaned blob
+    /// nobody points to (a few cents of storage, cleaned up below on a best-
+    /// effort basis). The reverse ordering (DB row first) would instead risk an
+    /// Attachment row whose BlobName points at nothing, which is a broken
+    /// download for a real user rather than a harmless unused blob.
+    /// </summary>
+    public async Task<AttachmentDto> AddAttachmentAsync(Guid ticketId, string fileName, string contentType, Stream content, long sizeInBytes, Guid uploadedByUserId, CancellationToken cancellationToken)
+    {
+        var ticket = await GetTicketOrThrowAsync(ticketId, cancellationToken);
+
+        // A GUID prefix (not the eventual Attachment.Id, which doesn't exist yet)
+        // is all that's needed to make the blob name collision-safe — two people
+        // uploading "screenshot.png" to the same ticket must not silently
+        // overwrite each other. Path.GetFileName strips any directory component
+        // a browser might (rarely, but historically) send, so a crafted file name
+        // can't be used to write outside the ticket's own "folder" in the container.
+        var blobName = $"tickets/{ticketId}/{Guid.NewGuid():N}-{Path.GetFileName(fileName)}";
+        await _blobStorageService.UploadAsync(blobName, content, contentType, cancellationToken);
+
+        try
+        {
+            var attachment = ticket.AddAttachment(fileName, contentType, sizeInBytes, blobName, uploadedByUserId);
+            await _ticketRepository.AddAttachmentAsync(attachment, cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+            _logger.LogInformation("Attachment {AttachmentId} ({FileName}, {SizeInBytes} bytes) added to ticket {TicketId} by {UserId}", attachment.Id, fileName, sizeInBytes, ticketId, uploadedByUserId);
+            return ToAttachmentDto(attachment);
+        }
+        catch
+        {
+            // Compensating cleanup: Attachment.Create rejected the metadata (e.g.
+            // size outside its allowed range — see Attachment.cs), or SaveChangesAsync
+            // itself failed. Either way, the blob written above no longer has a DB
+            // row pointing at it, so delete it rather than leave it orphaned. This
+            // is itself best-effort (swallowed) — if it fails too, worst case is a
+            // stray blob, never a broken attachment.
+            try { await _blobStorageService.DeleteAsync(blobName, cancellationToken); } catch { /* best effort */ }
+            throw;
+        }
+    }
+
+    public async Task<AttachmentDownload?> DownloadAttachmentAsync(Guid ticketId, Guid attachmentId, CancellationToken cancellationToken)
+    {
+        var ticket = await GetTicketOrThrowAsync(ticketId, cancellationToken);
+
+        var attachment = ticket.Attachments.FirstOrDefault(a => a.Id == attachmentId);
+        if (attachment is null) return null;
+
+        var blob = await _blobStorageService.DownloadAsync(attachment.BlobName, cancellationToken);
+        if (blob is null)
+        {
+            // The DB row exists but the blob doesn't — see the "known
+            // simplifications" note in docs/ARCHITECTURE.md (Ticket hard-delete
+            // doesn't currently clean up Blob Storage in the other direction, so
+            // this is the theoretical mirror image: possible after someone
+            // deletes a blob directly in the Azure Portal, not something normal
+            // application use can cause). Logged because it indicates a real
+            // inconsistency worth investigating, but still returned as a 404 —
+            // there is genuinely nothing to download.
+            _logger.LogWarning("Attachment {AttachmentId} on ticket {TicketId} has no blob at '{BlobName}'", attachmentId, ticketId, attachment.BlobName);
+            return null;
+        }
+
+        return new AttachmentDownload(blob.Content, blob.ContentType, attachment.FileName);
+    }
+
+    private static AttachmentDto ToAttachmentDto(Attachment attachment) => new(
+        attachment.Id,
+        attachment.FileName,
+        attachment.ContentType,
+        attachment.SizeInBytes,
+        attachment.UploadedByUserId,
+        attachment.CreatedAtUtc);
+
     private async Task<Ticket> GetTicketOrThrowAsync(Guid ticketId, CancellationToken cancellationToken)
     {
         var ticket = await _ticketRepository.GetByIdAsync(ticketId, includeDetails: true, cancellationToken);
@@ -234,5 +315,6 @@ public sealed class TicketService : ITicketService
         ticket.ModifiedAtUtc,
         ticket.Comments.OrderBy(c => c.CreatedAtUtc).Select(c => new TicketCommentDto(c.Id, c.AuthorUserId, c.Body, c.IsInternal, c.CreatedAtUtc)).ToList(),
         ticket.History.OrderBy(h => h.ChangedAtUtc).Select(h => new TicketHistoryDto(h.Id, h.ChangedByUserId, h.FieldName, h.OldValue, h.NewValue, h.ChangedAtUtc)).ToList(),
-        ticket.Tags.Select(t => t.Tag?.Name ?? t.TagId.ToString()).ToList());
+        ticket.Tags.Select(t => t.Tag?.Name ?? t.TagId.ToString()).ToList(),
+        ticket.Attachments.OrderBy(a => a.CreatedAtUtc).Select(ToAttachmentDto).ToList());
 }

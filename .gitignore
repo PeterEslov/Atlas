@@ -37,6 +37,11 @@ appsettings.*.local.json
 *.PublishSettings
 .azure/
 
+## Azurite (local Blob/Queue/Table Storage emulator — Del 10) — this is the
+## emulator's own local data files, generated the moment it starts. Same
+## reasoning as not committing a LocalDB .mdf: it's runtime state, not source.
+.azurite/
+
 ## Node (if a React frontend is added later)
 node_modules/
 dist/

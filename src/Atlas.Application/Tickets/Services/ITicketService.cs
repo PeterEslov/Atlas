@@ -30,4 +30,18 @@ public interface ITicketService
 
     /// <summary>Hard-deletes a ticket. See the doc comment on the implementation for why this is distinct from a status change.</summary>
     Task DeleteAsync(Guid ticketId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Uploads a file to Azure Blob Storage (Del 10) and records it as an Attachment
+    /// on the ticket. <paramref name="content"/> is read to completion and not
+    /// disposed by this method — the caller (the controller, via IFormFile) owns it.
+    /// </summary>
+    Task<AttachmentDto> AddAttachmentAsync(Guid ticketId, string fileName, string contentType, Stream content, long sizeInBytes, Guid uploadedByUserId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Returns the attachment's bytes, or null if either the ticket or the attachment
+    /// doesn't exist (both collapse to a 404 at the controller — the caller has no
+    /// need to distinguish "wrong ticket id" from "wrong attachment id").
+    /// </summary>
+    Task<AttachmentDownload?> DownloadAttachmentAsync(Guid ticketId, Guid attachmentId, CancellationToken cancellationToken);
 }

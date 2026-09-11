@@ -19,6 +19,33 @@ public interface ITicketRepository
     Task AddAsync(Ticket ticket, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Explicitly stages a brand-new Attachment as EntityState.Added.
+    ///
+    /// Every other child entity (TicketComment, TicketHistory, TicketTag) is
+    /// added purely by appending it to the Ticket's own in-memory collection
+    /// — e.g. ticket.AddComment(...) does "_comments.Add(comment)" — and
+    /// relying on EF Core's change tracker to discover it on its own via
+    /// DetectChanges(). No repository method is needed for those.
+    ///
+    /// Attachment goes through this explicit Add() instead, because leaving
+    /// it to that same implicit discovery was deterministically producing an
+    /// UPDATE (0 rows affected → DbUpdateConcurrencyException) instead of an
+    /// INSERT. EF Core's own docs call out exactly this ambiguity for entities
+    /// with client-generated (not database-generated) keys — which is what we
+    /// have here, since Attachment.Id is a Guid assigned in the constructor,
+    /// before EF ever sees it: without an explicit Add(), EF has to *guess*
+    /// whether a newly-discovered entity is brand new (Added) or an existing
+    /// row being re-attached (Unchanged/Modified). That guess is what went
+    /// wrong for this one call path (see TicketService.AddAttachmentAsync for
+    /// the full story — it's the only method that awaits something external,
+    /// the Blob Storage upload, between loading the tracked ticket and saving,
+    /// which is the one structural difference from AddComment/AddTag/etc.).
+    /// Calling this removes the guesswork entirely rather than relying on it
+    /// being resolved correctly by chance.
+    /// </summary>
+    Task AddAttachmentAsync(Attachment attachment, CancellationToken cancellationToken);
+
+    /// <summary>
     /// No-op for a change-tracked, attached entity — present so the intent is explicit
     /// at call sites and so an alternate implementation (e.g. a unit-test in-memory
     /// repository) has something to override.

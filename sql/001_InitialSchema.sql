@@ -311,7 +311,7 @@ BEGIN
         FileName            NVARCHAR(260)    NOT NULL,
         ContentType         NVARCHAR(100)    NOT NULL,
         SizeInBytes         BIGINT           NOT NULL,
-        BlobName            NVARCHAR(500)    NOT NULL, -- pointer into Azure Blob Storage, see Del 8
+        BlobName            NVARCHAR(500)    NOT NULL, -- pointer into Azure Blob Storage, see Del 10
         UploadedByUserId    UNIQUEIDENTIFIER NOT NULL,
         CreatedAtUtc        DATETIME2        NOT NULL,
         ModifiedAtUtc       DATETIME2        NULL,

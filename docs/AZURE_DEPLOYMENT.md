@@ -493,10 +493,132 @@ den riktiga bekräftelsen på att Del 9 är klar — mer talande än vilken
 enskild logg som helst, av samma anledning som `/health` var det för
 Del 8.
 
-## Nästa: Del 10 — Azure Blob Storage
+## 8. Del 10: Azure Blob Storage — filuppladdning för Attachments
 
-Filuppladdning för `Attachments` (`Attachment.BlobName` är i dagsläget bara
-en textkolumn, ingen uppladdningsendpoint finns än) — samma mönster igen:
-koppla in en Azure Storage-resurs och autentisera App Service mot den via
-samma managed identity som redan pratar med Key Vault och (från och med
-Del 9) Azure SQL, i stället för ännu en lagrad hemlighet.
+Samma grundmönster en tredje gång: koppla in en Azure-resurs och autentisera
+App Service mot den via samma managed identity som redan pratar med Key
+Vault (avsnitt 3) och Azure SQL (avsnitt 7), i stället för ännu en lagrad
+hemlighet. Till skillnad från de två föregående valde du (till skillnad
+från den befintliga SQL-servern) att skapa ett **nytt** Storage-konto här
+snarare än att återanvända ett befintligt — enklare att resonera om vilka
+behörigheter kontot faktiskt behöver när det bara innehåller det här
+projektets bilagor.
+
+Koden är redan skriven och pushad till repot: `IBlobStorageService`
+(Atlas.Application), `AzureBlobStorageService` (Atlas.Infrastructure) och de
+två nya endpointerna på `TicketsController`
+(`POST .../attachments`, `GET .../attachments/{id}/download`) — se
+`DependencyInjection.cs`s "Blob Storage"-block för hela resonemanget bakom
+den dubbla lokal/molnvägen. Det här avsnittet är bara Azure-sidan; testa
+lokalt med Azurite (README steg 4) innan du deployar, om du inte redan gjort
+det.
+
+**Ett fynd värt att nämna innan du börjar:** när jag skrev om koden märkte
+jag att `Atlas.Api.csproj` i molnspegeln aldrig fick `Azure.Identity` och
+`Azure.Extensions.AspNetCore.Configuration.Secrets` tillagda som explicita
+`PackageReference`, trots att `Program.cs` använder båda sedan Del 8 (du
+körde `dotnet add package` direkt på din maskin då, vilket uppdaterar din
+riktiga `.csproj` men inte spegeln jag jobbar mot här). Jag har lagt till
+dem nu (version 1.21.0 respektive 1.5.2, de senaste stabila enligt NuGet
+just nu) tillsammans med `Azure.Storage.Blobs` (12.29.2) i
+`Atlas.Infrastructure.csproj`. Om din maskin redan har andra versioner
+installerade löser `dotnet restore` det mesta av sig själv, men säg till om
+du får en versionskonflikt så pinnar vi om till exakt det du redan har.
+
+```bash
+# Ny terminal sedan tidigare avsnitt? Sätt om RG/WEBAPP_NAME/KEYVAULT_NAME/
+# PRINCIPAL_ID också (PRINCIPAL_ID sattes i avsnitt 3 — samma App Service,
+# samma identitet, återanvänds rakt av här).
+STORAGE_ACCOUNT_NAME=<ett globalt unikt namn, t.ex. stprojectatlasdevsc — bara gemener/siffror, 3-24 tecken>
+STORAGE_RG="$RG"
+```
+
+### 8.1 Skapa Storage-kontot och containern
+
+Ett vanligt General Purpose v2-konto med lokal redundans (LRS, billigast,
+gott nog för ett portfolioprojekt — ingen anledning att betala för
+geo-replikering av testfiler) och `--allow-blob-public-access false`, så
+att containerns egen `PublicAccessType.None` (satt i koden) inte kan
+undermineras av kontots inställningar:
+
+```bash
+az storage account create \
+  --name "$STORAGE_ACCOUNT_NAME" \
+  --resource-group "$STORAGE_RG" \
+  --sku Standard_LRS \
+  --kind StorageV2 \
+  --allow-blob-public-access false \
+  --min-tls-version TLS1_2
+```
+
+Containern (`attachments`, samma namn koden defaultar till) skapas inte
+här via `az` — `AddInfrastructure` skapar den själv vid uppstart
+(`CreateIfNotExists`, se `DependencyInjection.cs`), exakt samma
+"appen säkerställer sitt eget schema/sina egna resurser vid start"-idé som
+`dotnet ef database update` för tabeller. Det betyder också att App Service
+behöver skrivrättighet mot kontot redan vid första starten efter den här
+sektionen — se 8.2 innan du sätter App Setting i 8.3, annars kraschar
+appen vid uppstart med ett auktoriseringsfel (samma sorts "fail fast, tydligt
+fel" som en saknad `Jwt:SigningKey` ger, se `Program.cs`).
+
+### 8.2 Ge App Service rättighet till kontot
+
+```bash
+STORAGE_ACCOUNT_ID=$(az storage account show --name "$STORAGE_ACCOUNT_NAME" --resource-group "$STORAGE_RG" --query id -o tsv)
+echo "STORAGE_ACCOUNT_ID=$STORAGE_ACCOUNT_ID"   # ska se ut som /subscriptions/.../storageAccounts/<namn>
+
+az role assignment create \
+  --role "Storage Blob Data Contributor" \
+  --assignee "$PRINCIPAL_ID" \
+  --scope "$STORAGE_ACCOUNT_ID"
+```
+
+"Storage Blob Data Contributor" (inte bara "Reader" eller kontots klassiska
+access keys) ger läs+skriv+radera på blob-nivå via Azure AD-identiteten
+själv — samma RBAC-baserade, nyckelfria mönster som "Key Vault Secrets
+User" i avsnitt 3.
+
+### 8.3 Peka App Service mot kontot
+
+Kontots URL är, precis som `KeyVault:Name`, inte i sig hemlig — att känna
+till adressen ger ingen åtkomst utan en identitet Azure litar på, så det
+är en vanlig Application Setting, inte en Key Vault-hemlighet:
+
+```bash
+az webapp config appsettings set \
+  --name "$WEBAPP_NAME" \
+  --resource-group "$RG" \
+  --settings BlobStorage__AccountUrl="https://$STORAGE_ACCOUNT_NAME.blob.core.windows.net"
+
+az webapp restart --name "$WEBAPP_NAME" --resource-group "$RG"
+```
+
+### 8.4 Verifiera
+
+```bash
+TOKEN="<en giltig JWT — se avsnitt 7.5 för hur du loggar in mot App Service>"
+TICKET_ID="<ett riktigt ticket-id — skapa ett via POST /api/tickets om du inte redan har ett>"
+
+curl -X POST "https://$WEBAPP_NAME.azurewebsites.net/api/tickets/$TICKET_ID/attachments" \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "file=@screenshot.png"
+```
+
+Ett 201-svar med attachment-metadata (id, filnamn, storlek) betyder att
+hela kedjan fungerar: App Service → managed identity → Storage-kontot.
+Hämta filen tillbaka med `id`:t från svaret ovan:
+
+```bash
+curl "https://$WEBAPP_NAME.azurewebsites.net/api/tickets/$TICKET_ID/attachments/<attachment-id>/download" \
+  -H "Authorization: Bearer $TOKEN" \
+  -o downloaded-screenshot.png
+```
+
+## Nästa: Del 11 — bakgrundsjobb (Atlas.Worker)
+
+Fas 3 (Azure) är därmed i praktiken klar så snart avsnitt 8 är verifierat
+— kvar i den fasen är bara Del 20 (generalisera Key Vault-uppsättningen,
+byta ut den återanvända SQL-admin-inloggningen mot en snävare). Del 11
+öppnar Fas 4 (Enterprise): ett separat bakgrundsjobb som upptäcker
+förfallna ärenden, det första steget mot Service Bus och händelsedriven
+kommunikation.
