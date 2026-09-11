@@ -274,6 +274,120 @@ mid-operation transient fault it's built to retry — nothing to fix, just
 the cost of `--auto-pause-delay 60` doing its job of not billing for an idle
 database.
 
+**Del 11 — a background worker for overdue-ticket notifications.** The
+first Del in Fas 4 ("Enterprise"), and the first time anything in this
+solution runs as a second, separate process alongside `Atlas.Api`:
+`Atlas.Worker`, a plain .NET Generic Host (`Microsoft.NET.Sdk.Worker`,
+`Host.CreateApplicationBuilder`) rather than an ASP.NET Core host — no HTTP
+surface at all, just a `BackgroundService` that polls every 5 minutes for
+tickets that have become overdue and turns each one into a `Notification`
+row, the first code path to actually write to the `Notifications` table,
+which has existed in the schema since Fas 1 but sat unused until now.
+
+Having a second host process forced a real architectural question:
+`DependencyInjection.cs`'s `AddInfrastructure()` was, until now, a single
+monolithic method — fine for `Atlas.Api`, which genuinely needs persistence,
+Blob Storage and JWT auth all at once, but wrong for `Atlas.Worker`, which
+only ever reads tickets and writes notifications. Forcing the worker through
+the same `AddInfrastructure()` would have meant it inherited Blob Storage's
+and JWT's fail-fast startup checks (Del 10's `CreateIfNotExists` call, the
+`Jwt:SigningKey` length check in `Program.cs`) for two systems it never
+touches — it would refuse to start without `BlobStorage:*`/`Jwt:*`
+configuration it has no use for. The fix: split `AddInfrastructure()` into
+three composable pieces — `AddPersistence`, `AddBlobStorage`,
+`AddAuthInfrastructure` — with `AddInfrastructure()` itself now just calling
+all three in order (so `Atlas.Api`'s `Program.cs` needed no changes at all),
+while `Atlas.Worker`'s `Program.cs` calls only `AddPersistence`.
+
+Finding overdue tickets reuses the exact same business definition as
+`Ticket.IsOverdue` and the UI's `TicketListQuery.OverdueOnly` filter (a past
+`DueAtUtc`, not `Resolved`/`Closed`/`Cancelled`, assigned to someone — an
+unassigned ticket has nobody to notify), but as a dedicated, non-paginated
+`ITicketRepository.GetOverdueAsync()` rather than reusing `SearchAsync`:
+`TicketService.Normalize()` caps `SearchAsync` at `MaxPageSize = 100`,
+appropriate for a UI page but wrong for a batch job that needs the
+*complete* overdue set every time, not one page of it. Avoiding a duplicate
+reminder on every 5-minute tick for the same overdue ticket is a single
+batch existence check — `INotificationRepository.GetNotifiedTicketIdsAsync
+(NotificationType.TicketOverdue, ticketIds)` — the same N+1-avoidance shape
+as Del 7's `GetMemberCountsAsync`, run once per tick rather than once per
+ticket.
+
+`OverdueTicketWorker : BackgroundService` is a singleton that lives for the
+whole process, but `AtlasDbContext` is scoped and must never be shared
+across concurrent or long-lived operations — the same reason a web request
+gets its own DI scope in `Atlas.Api`. `IServiceScopeFactory` is the standard
+bridge: every tick creates its own scope (and therefore its own
+`DbContext`), does its work, and disposes it — a fresh scope every 5 minutes
+rather than one scope for the process's entire lifetime. A single failed
+tick is caught and logged rather than allowed to crash the whole worker —
+the same "keep going" philosophy any long-running service needs, since the
+alternative is the entire background service going dark until someone
+notices and restarts it by hand.
+
+Getting `Atlas.Worker` running at all surfaced a build-template gotcha, not
+a logic bug: the `Microsoft.NET.Sdk.Worker` project template defaults to
+`<InvariantGlobalization>true</InvariantGlobalization>` — a reasonable
+default for a worker aimed at a minimal container image, since it strips out
+ICU's culture-specific data (date formats, sorting, collation) to shrink the
+runtime. But `Microsoft.Data.SqlClient` genuinely needs that data internally
+for the TDS login handshake's collation negotiation, and fails outright with
+`System.NotSupportedException: Globalization Invariant Mode is not
+supported` the moment it tries to open a connection — before even attempting
+authentication. `Atlas.Api.csproj` never had this setting (the ASP.NET Core
+Web template doesn't default to it), which is why the exact same
+`ConnectionStrings:AtlasDb` value had worked there without incident all
+along. The fix was simply removing the line.
+
+That's also where a second, deeper bug came out — and where the Del 10
+`DbUpdateConcurrencyException` story above needs a correction. `Ticket.
+AssignTo(...)` threw the identical `DbUpdateConcurrencyException: expected
+to affect 1 row(s), but actually affected 0 row(s)` as Del 10's `Attachment`
+bug, but this time for `TicketHistory` (`_history.Add(...)` inside
+`AssignTo`) — and with no `await` anywhere between loading the tracked
+`Ticket` and calling `SaveChangesAsync`, which was the entire distinguishing
+factor Del 10's fix leaned on. That theory turns out to have been
+incomplete: the real root cause is that *every* entity in this model has a
+`Guid` key assigned client-side (`Guid.NewGuid()` in the constructor), with
+no explicit EF Core configuration saying so. Left unconfigured, EF Core's
+default convention for a `Guid` primary key is still "this *could* be
+store-generated" (`ValueGeneratedOnAdd`). The moment a new child entity is
+discovered through the change tracker rather than an explicit `Add()` call —
+appending to an already-tracked, previously-loaded parent's collection, with
+or without an intervening `await` — EF sees a non-default key value on an
+entity it has never tracked before and, since that kind of key *could* be
+store-generated, assumes the row must already exist and marks it `Modified`
+instead of `Added`. An `UPDATE` gets generated against a row that was never
+inserted; zero rows match; `DbUpdateConcurrencyException`. Del 10's explicit
+`AddAttachmentAsync` fix was a correct, narrow workaround for `Attachment`
+specifically, but it left the identical latent bug sitting in
+`TicketComment`, `TicketTag`, `TicketHistory` and `Notification` — nobody
+had exercised those paths against a real database yet to find out.
+
+The actual fix, in `AtlasDbContext.OnModelCreating`, is a single loop over
+every entity type in the model that marks any `Guid`-typed `Id` property
+`ValueGeneratedNever()` — telling EF Core the truth, once, for the whole
+model, rather than re-discovering and patching this one call site at a time
+as each new domain method happens to get its first live test. It doesn't
+change the database schema at all (SQL Server's `uniqueidentifier` columns
+here were never store-generated via a `DEFAULT` constraint — the ambiguity
+was purely in EF's own bookkeeping), so no new EF Core migration was needed.
+
+**Confirmed working end-to-end locally on 2026-09-11**: a ticket created
+with a past `DueAtUtc` and then assigned (via `POST
+/api/tickets/{id}/assign`) showed up in `Atlas.Worker`'s very next tick as
+`"N ticket(s) overdue, 1 new notification(s) created"`, with a matching
+`Notifications` row confirmed via `sqlcmd`; a second tick against the same,
+now-already-notified ticket correctly created zero new rows — both the
+create path and the duplicate-prevention path proven in the same run.
+`azure-pipelines.yml` needed no changes: its `dotnet restore`/`build`/`test`
+steps aren't scoped to a single project, so they already pick up
+`Atlas.Worker` via `ProjectAtlas.sln`; `dotnet publish`/the deploy stage stay
+scoped to `Atlas.Api` only, so nothing about how the worker would actually
+run in Azure (a Container App Job? a WebJob? Functions with a timer
+trigger? an always-on App Service?) has been decided yet — deliberately
+deferred, the same way Del 20 remains open, rather than guessed at now.
+
 ## Current known simplifications (by design)
 
 - Azure SQL (Del 9) reuses Peter's existing SQL login for the moment — the
@@ -292,9 +406,16 @@ database.
   dev/demo convenience (see the doc comment on `RegisterRequest`) that a
   real deployment would replace with an invite flow or a
   default-to-Customer policy before going anywhere near production.
-- `AuditLog` and `Notification` tables exist in the schema but nothing
-  writes to them yet — they're wired up in Phase 4 (Del 11's overdue-ticket
-  background worker and Del 12's Service Bus consumers).
+- `Notification` has been written to since Del 11 (the overdue-ticket
+  background worker); `AuditLog` still has nothing writing to it — that's
+  Del 12's Service Bus consumers.
+- `Atlas.Worker` (Del 11) only runs locally so far — it isn't deployed
+  anywhere in Azure yet. *How* it should run there (a Container App Job on a
+  schedule, a WebJob alongside the existing App Service, Azure Functions with
+  a timer trigger, or its own always-on App Service) is a deliberate open
+  question, not an oversight — the same "get it right locally first, decide
+  the Azure hosting shape as its own step" order Del 8/9/10 already followed
+  for `Atlas.Api` itself.
 - Ticket hard-delete (`TicketService.DeleteAsync`) cascades `Attachment` rows
   away via the configured `OnDelete(DeleteBehavior.Cascade)`, but doesn't
   clean up the matching blobs in Storage the other direction — a theoretical

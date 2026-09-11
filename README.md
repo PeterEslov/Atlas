@@ -114,12 +114,15 @@ Principle, not just a folder convention.
   no external package)
 - xUnit for domain unit tests
 - Swagger / OpenAPI (ASP.NET Core's built-in generator + Swashbuckle UI)
+- **.NET Generic Host / Worker Service** (`Atlas.Worker`) — a second, separate
+  host process for background work, distinct from `Atlas.Api`'s ASP.NET Core
+  host; see [Del 11](#roadmap) below
 
-Planned for later phases (see [Roadmap](#roadmap)): Azure Service Bus, a
-background worker, Redis, Application Insights, Docker, Bicep, and a React
-frontend. (Key Vault and a CI/CD pipeline are already in place as of Del 8,
-and Azure SQL and Blob Storage as of Del 9/10 — see below — all pulled
-forward rather than left for later.)
+Planned for later phases (see [Roadmap](#roadmap)): Azure Service Bus, Redis,
+Application Insights, Docker, Bicep, and a React frontend. (Key Vault and a
+CI/CD pipeline are already in place as of Del 8, Azure SQL and Blob Storage
+as of Del 9/10, and a background worker as of Del 11 — see below — all
+pulled forward rather than left for later.)
 
 ## Project structure
 
@@ -515,7 +518,11 @@ database.
       and downloading from a real Azure Storage account. Del 20 is now
       mostly just "generalize the Key Vault setup, add a least-privilege
       SQL login"
-- [ ] **Phase 4 — Enterprise**: Service Bus, background worker, Redis, audit logging
+- [~] **Phase 4 — Enterprise**: Del 11 (background worker for overdue-ticket
+      notifications) confirmed working end-to-end (2026-09-11) — a second
+      host process, `Atlas.Worker` (.NET Generic Host, not ASP.NET Core),
+      polling every 5 minutes and writing to the `Notifications` table
+      through the same `AtlasDb`; Service Bus, Redis and audit logging remain
 - [ ] **Phase 5 — Quality**: broader test suite, Docker, structured logging, monitoring
 - [ ] **Phase 6 — DevOps**: Bicep (Infrastructure as Code) — CI/CD itself
       already exists as of Del 8, on Azure Pipelines
