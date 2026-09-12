@@ -614,11 +614,178 @@ curl "https://$WEBAPP_NAME.azurewebsites.net/api/tickets/$TICKET_ID/attachments/
   -o downloaded-screenshot.png
 ```
 
-## Nästa: Del 11 — bakgrundsjobb (Atlas.Worker)
+## 9. Del 12: Azure Service Bus — molnsidan (öppen, se nedan)
 
-Fas 3 (Azure) är därmed i praktiken klar så snart avsnitt 8 är verifierat
-— kvar i den fasen är bara Del 20 (generalisera Key Vault-uppsättningen,
-byta ut den återanvända SQL-admin-inloggningen mot en snävare). Del 11
-öppnar Fas 4 (Enterprise): ett separat bakgrundsjobb som upptäcker
-förfallna ärenden, det första steget mot Service Bus och händelsedriven
-kommunikation.
+**Det här avsnittet skiljer sig från 3/7/8 ovan på ett viktigt sätt:** de
+stegen är redan utförda och verifierade mot din skarpa prenumeration.
+Service Bus-molnsidan för Del 12 är det *inte* — den står som en öppen punkt
+i `docs/ARCHITECTURE.md`s "Current known simplifications". Det här avsnittet
+är alltså en checklista att följa **när** du är redo, inte en logg över vad
+som redan hänt, till skillnad från resten av den här filen.
+
+Anledningen att det ändå finns något kvar att göra här, trots att Del 12 är
+klar och verifierad: till skillnad från SQL (avsnitt 7) och Blob Storage
+(avsnitt 8) — där lokal utveckling pratar mot en *emulator* (LocalDB,
+Azurite) och Azure-resursen provisioneras separat, här, som ett eget steg —
+har Service Bus ingen emulator alls. Del 12 löste det genom att låta lokal
+utveckling prata mot **samma riktiga Azure-namespace** produktionen skulle
+använda (se README steg 4 och `AddMessaging`s doc comment). Namespacet,
+topicet (`atlas-ticket-events`) och subscriptionen (`atlas-notifications`)
+finns alltså redan i Azure — skapade under lokal utveckling, inte som ett
+separat "deploya till Azure"-steg. Det som saknas är att ge den
+**driftsatta** `Atlas.Api`s egen managed identity samma sorts behörighet
+Peters `az login`-identitet redan har lokalt.
+
+### 9.1 Ge App Service (Atlas.Api) rättighet till Service Bus-namespacet
+
+```bash
+# Ny terminal? Sätt om RG/WEBAPP_NAME/PRINCIPAL_ID från avsnitt 1/3 igen —
+# PRINCIPAL_ID är samma App Service-identitet som redan används i 3.x/8.2.
+SERVICEBUS_NAMESPACE="nspl-sb-core-dev-sc"   # samma namespace README steg 4 redan pekar lokal utveckling mot
+SERVICEBUS_RG=<resursgruppen namespacet ligger i>
+
+SERVICEBUS_NAMESPACE_ID=$(az servicebus namespace show --resource-group "$SERVICEBUS_RG" --name "$SERVICEBUS_NAMESPACE" --query id -o tsv)
+echo "SERVICEBUS_NAMESPACE_ID=$SERVICEBUS_NAMESPACE_ID"
+
+az role assignment create \
+  --role "Azure Service Bus Data Sender" \
+  --assignee "$PRINCIPAL_ID" \
+  --scope "$SERVICEBUS_NAMESPACE_ID"
+```
+
+"Data **Sender**", inte "Data Owner" (rollen Peters egna identitet har
+lokalt för att både kunna skicka och ta emot under test): den driftsatta
+`Atlas.Api` bara publicerar, den ska aldrig behöva ta emot eller
+administrera ett namespace den inte konsumerar från — minsta-privilegium,
+samma tanke som "Storage Blob Data Contributor" i 8.2 snävare än en
+kontonyckel hade varit.
+
+`ServiceBus:FullyQualifiedNamespace` behöver också sättas som en App
+Setting — precis som `BlobStorage__AccountUrl` i 8.3 är den ett värde, inte
+en hemlighet (att känna till ett namespace-hostnamn ger ingen åtkomst utan
+en identitet Azure litar på), så den hör hemma som en vanlig Application
+Setting, inte i Key Vault:
+
+```bash
+az webapp config appsettings set \
+  --name "$WEBAPP_NAME" \
+  --resource-group "$RG" \
+  --settings ServiceBus__FullyQualifiedNamespace="$SERVICEBUS_NAMESPACE.servicebus.windows.net"
+
+az webapp restart --name "$WEBAPP_NAME" --resource-group "$RG"
+```
+
+### 9.2 Verifiera (delvis)
+
+Eftersom `Atlas.Worker` — mottagarsidan — inte är driftsatt i Azure än (se
+docs/ARCHITECTURE.md: en medvetet öppen fråga om Container App Job, WebJob,
+Functions med timer-trigger, eller en egen App Service), går det **inte**
+att göra en fullständig rundturs-verifiering som 7.5/8.4 fick — det finns
+ingen konsument i molnet ännu som kan bekräfta att ett meddelande faktiskt
+plockades upp. Det som går att verifiera nu är bara att den driftsatta
+`Atlas.Api` lyckas publicera utan fel:
+
+```bash
+TOKEN="<en giltig JWT mot App Service — se 7.5 för hur du loggar in>"
+TICKET_ID="<ett riktigt ticket-id i molnet>"
+
+curl -i -X POST "https://$WEBAPP_NAME.azurewebsites.net/api/tickets/$TICKET_ID/assign" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"userId":"<en riktig user-guid>"}'
+```
+
+Ett `200 OK` plus frånvaron av en `Azure.Messaging.ServiceBus`-relaterad
+`LogWarning` i `az webapp log tail` (publish-anropet loggar bara en varning
+vid fel, kastar aldrig ett fel till klienten — se
+`ServiceBusTicketEventPublisher`) är den bekräftelse som finns tillgänglig
+just nu. Meddelandet hamnar i `atlas-ticket-events`-topicet, men ingen
+konsument i Azure läser det förrän `Atlas.Worker` faktiskt driftsätts dit.
+
+## 10. Del 13: Redis — Azure Cache for Redis (öppen, se nedan)
+
+Samma sak som avsnitt 9 gäller här: det här är en plan att följa när du är
+redo, inte en logg över redan utfört arbete. Ingen Azure Cache for
+Redis-instans är provisionerad än — Del 13 är klar och verifierad
+**lokalt**, mot en Docker-container (se README och
+`scripts/test-del13-redis-cache.sh`), exakt samma "riktig lokal motsvarighet
+i stället för en emulator eller produktion självt"-idé som LocalDB och
+Azurite redan följer (och som Service Bus i avsnitt 9 ovan, ovanligt nog,
+*inte* kunde följa).
+
+### 10.1 Skapa en Azure Cache for Redis-instans
+
+```bash
+REDIS_NAME=<ett globalt unikt namn, t.ex. redis-projectatlas-dev-sc>
+
+az redis create \
+  --name "$REDIS_NAME" \
+  --resource-group "$RG" \
+  --location swedencentral \
+  --sku Basic \
+  --vm-size c0
+```
+
+`Basic`/`C0` (billigast, ingen SLA, ingen replikering) räcker gott för ett
+portfolioprojekts cache-lager — precis samma "billigast som fortfarande
+bevisar mönstret" avvägning som `Standard_LRS` fick för Storage-kontot i
+8.1. Etableringen tar typiskt 15–20 minuter, ovanligt långsamt jämfört med
+resten av den här filens `az`-kommandon — vänta ut den (`az redis show
+--name "$REDIS_NAME" --resource-group "$RG" --query provisioningState`
+växlar från `Creating` till `Succeeded`) innan nästa steg.
+
+### 10.2 Peka App Service mot instansen
+
+Till skillnad från Key Vault, Azure SQL, Blob Storage och Service Bus ovan
+finns det **ingen managed-identity/RBAC-väg för klassisk (icke-Enterprise)
+Azure Cache for Redis** — bara nyckelbaserad autentisering. Det är därför
+`Redis:ConnectionString` (till skillnad från `BlobStorage:AccountUrl`/
+`ServiceBus:FullyQualifiedNamespace`) faktiskt innehåller en hemlighet i
+molnet, och hör hemma i Key Vault, inte som en vanlig Application Setting —
+se den dokumenterade luckan i `docs/ARCHITECTURE.md` (en Del 20-kandidat,
+tillsammans med den återanvända SQL-admin-inloggningen).
+
+```bash
+REDIS_KEY=$(az redis list-keys --name "$REDIS_NAME" --resource-group "$RG" --query primaryKey -o tsv)
+REDIS_CONNECTION_STRING="$REDIS_NAME.redis.cache.windows.net:6380,password=$REDIS_KEY,ssl=True,abortConnect=False"
+
+az keyvault secret set \
+  --vault-name "$KEYVAULT_NAME" \
+  --name "Redis--ConnectionString" \
+  --value "$REDIS_CONNECTION_STRING"
+
+az webapp restart --name "$WEBAPP_NAME" --resource-group "$RG"
+```
+
+(`abortConnect=False` är StackExchange.Redis-specifikt, inte en Azure-grej:
+det säger åt klienten att köa anrop och försöka återansluta istället för att
+kasta ett undantag direkt om anslutningen inte är uppe i exakt det ögonblick
+en request kommer in — rimligt för en cache vars hela poäng är att vara
+valfri, se `RedisTicketStatsCache`s "fail open"-resonemang.)
+
+### 10.3 Verifiera
+
+```bash
+TOKEN="<en giltig JWT mot App Service>"
+
+curl -s "https://$WEBAPP_NAME.azurewebsites.net/api/tickets/stats" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Anropa det två gånger snabbt efter varandra och jämför `generatedAtUtc` i
+svaret — identiskt värde betyder att den driftsatta `Atlas.Api` faktiskt
+cachar mot den riktiga Azure Cache for Redis-instansen, inte bara att
+endpointen svarar. Samma metodik som `scripts/test-del13-redis-cache.sh`
+redan använder lokalt, bara mot `$WEBAPP_NAME` istället för `localhost`.
+
+## Nästa: Del 15 — Audit Log
+
+Fas 4s enda återstående lokala arbete efter Del 13 är Del 15 (Audit Log) —
+`AuditLog`-tabellen har funnits i schemat sedan Fas 1 men fortfarande inget
+som skriver till den (se `docs/ARCHITECTURE.md`s "Current known
+simplifications"). Fas 4:s molnsida har nu två öppna punkter som väntar på
+samma beslut — *var* `Atlas.Worker` ska köras i Azure (avsnitt 9 ovan) — och
+en tredje, oberoende av den frågan, som bara väntar på att köras (avsnitt
+10 ovan, Redis). Fas 3s enda kvarvarande punkt är fortsatt Del 20
+(generalisera Key Vault-uppsättningen, byta ut den återanvända
+SQL-admin-inloggningen mot en snävare — nu med Redis-anslutningssträngen som
+ytterligare en hemlighet den generaliseringen får ta hand om).

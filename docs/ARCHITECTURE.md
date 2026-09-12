@@ -498,6 +498,85 @@ simplifications" below).
 alongside the mundane duplicate-notification finding described above, which
 turned out to demonstrate correct behaviour rather than a bug.
 
+**Del 13 — Redis, a cache-aside dashboard query.** The roadmap only ever said
+"Redis — cache for dashboard queries", but no dashboard query existed yet —
+so Del 13 introduces one: `GET /api/tickets/stats`, aggregate ticket counts
+by status, by priority, and how many are overdue, for the caller's own
+organization. It's exactly the kind of query a dashboard calls repeatedly and
+that's expensive enough (three `GROUP BY`/`COUNT` queries against `Tickets`)
+to be worth caching, rather than caching something that already existed
+purely to have something to cache.
+
+`TicketStatsDto` (`Atlas.Application/Tickets/Dtos`) is deliberately flat —
+named counts (`OpenCount`, `HighPriorityCount`, ...) rather than a
+`Dictionary<TicketStatus,int>` — so a dashboard, curl, or Swagger reads
+named fields directly, with no enum-keyed dictionary to unpack. `GetStatsAsync`
+lands on `ITicketRepository` (`TicketRepository`'s implementation runs three
+small aggregate queries server-side, never loading every ticket into memory
+to count in C#) the same way `ITicketRepository`'s own doc comment already
+argues against a generic `IRepository<T>`: `ITicketStatsCache`
+(`Atlas.Application/Common/Interfaces`) follows the identical shape — one
+narrow interface (`GetAsync`/`SetAsync`/`InvalidateAsync`, one entry per
+organization) rather than a generic `ICache<TKey,TValue>` that would just
+push key-naming, serialization and TTL decisions out to every call site.
+
+`TicketService.GetStatsAsync` is the cache-aside logic itself: check Redis
+first; on a hit, return it without ever touching Azure SQL; on a miss
+(nothing cached, the TTL expired, or Redis itself is unreachable —
+`ITicketStatsCache.GetAsync` treats all three identically), fall through to
+the real query and populate the cache before returning. The more interesting
+design work was deciding, precisely, which of `TicketService`'s existing
+mutating methods need to evict that cache: `CreateAsync`, `ChangeStatusAsync`,
+`ChangePriorityAsync`, `ReopenAsync` and `DeleteAsync` all do (each changes a
+counted dimension — a status/priority bucket, or `TotalCount` itself), while
+`AssignAsync` deliberately does **not** — who a ticket is assigned to isn't
+one of `TicketStatsDto`'s counted fields, so invalidating there would just be
+extra Redis round-trips for a write the cached snapshot was never wrong
+about. Getting this right, method by method, is the actual skill in cache
+invalidation — "invalidate on every write, just in case" would have been
+easier to write and wrong to reach for.
+
+A short TTL (`Redis:StatsCacheTtlSeconds`, 30 by default) sits on top of that
+explicit invalidation, and isn't belt-and-braces redundancy: it's a backstop
+for two things invalidation can't fix — a Redis call that itself fails at
+invalidation time, and `OverdueCount`, which drifts stale purely from the
+passage of time, with no ticket write at all to hook an eviction onto.
+
+`RedisTicketStatsCache` (`Atlas.Infrastructure/Caching`) is built on
+`IDistributedCache` — the ASP.NET Core abstraction over "an external
+key/value store with TTLs" — registered via `AddStackExchangeRedisCache`
+(`DependencyInjection.AddCaching`), rather than talking to
+StackExchange.Redis's own richer client API directly; a single get/set/
+remove-by-key store per organization is all this needs. Every method in it
+is **fail open**, the same principle Del 12's Service Bus publish already
+established in `TicketService.AssignAsync`: a Redis outage degrades this
+feature back to "every request hits the database," logged as a warning,
+never a 500 for a read that the database could have answered perfectly well
+on its own.
+
+Unlike Del 12's Service Bus (no first-party local emulator, so local
+development there deliberately talks to the same real Azure namespace
+production uses), Redis has a genuine local option: `docker run -p
+6379:6379 redis` speaks the exact same RESP wire protocol a real Redis
+server does. So, like LocalDB (SQL) and Azurite (Blob Storage) before it,
+local development here runs against something real rather than a fake or
+production itself — `Redis:ConnectionString` means `localhost:6379` locally
+and an Azure Cache for Redis connection string (with its access key baked
+in — see "Current known simplifications" below for why there's no
+managed-identity path here yet) in Azure, the same one-key-does-both-
+environments idiom `BlobStorage:ConnectionString`/`AccountUrl` already uses.
+
+**Confirmed working end-to-end locally on 2026-09-12**, via
+`scripts/test-del13-redis-cache.sh` against a running `Atlas.Api` and a
+local Redis container: two rapid calls to `GET /api/tickets/stats` returned
+an identical `generatedAtUtc` (a genuine cache hit); a status change
+produced a new `generatedAtUtc` immediately, without waiting out the TTL (a
+genuine invalidation); adding a comment left `generatedAtUtc` unchanged (the
+negative case — a write that correctly does *not* invalidate); and stopping
+the Redis container entirely still returned `200 OK` with fresh data instead
+of a `500` (fail-open, proven by actually killing the dependency rather than
+just reading the code).
+
 ## Current known simplifications (by design)
 
 - Azure SQL (Del 9) reuses Peter's existing SQL login for the moment — the
@@ -539,6 +618,15 @@ turned out to demonstrate correct behaviour rather than a bug.
   the Azure hosting shape as its own step" order Del 8/9/10 already followed
   for `Atlas.Api` itself. Del 12's Service Bus consumer inherits the same
   open question, since it lives inside `Atlas.Worker`.
+- Del 13's Redis cache has no managed-identity path at all, unlike Blob
+  Storage (Del 10) and Service Bus (Del 12): classic (non-Enterprise) Azure
+  Cache for Redis only supports key-based authentication, so
+  `Redis:ConnectionString` genuinely is a secret in Azure — a Key Vault
+  entry, not a plain App Setting, unlike `BlobStorage:AccountUrl`/
+  `ServiceBus:FullyQualifiedNamespace` — and no Azure Cache for Redis
+  instance has been provisioned yet at all (see `docs/AZURE_DEPLOYMENT.md`
+  section 10 for the plan). Del 13 is confirmed working only locally, against
+  a Docker Redis container, so far.
 - Ticket hard-delete (`TicketService.DeleteAsync`) cascades `Attachment` rows
   away via the configured `OnDelete(DeleteBehavior.Cascade)`, but doesn't
   clean up the matching blobs in Storage the other direction — a theoretical

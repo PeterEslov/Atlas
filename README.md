@@ -120,12 +120,16 @@ Principle, not just a folder convention.
 - **Azure Service Bus** (`Azure.Messaging.ServiceBus`, Topics/Subscriptions) —
   publish/subscribe messaging between `Atlas.Api` and `Atlas.Worker`; see
   [Del 12](#roadmap) below
+- **Redis** (`Microsoft.Extensions.Caching.StackExchangeRedis`) — cache-aside
+  for `GET /api/tickets/stats`, with explicit invalidation on the ticket
+  writes that actually change it; see [Del 13](#roadmap) below
 
-Planned for later phases (see [Roadmap](#roadmap)): Redis, Application
-Insights, Docker, Bicep, and a React frontend. (Key Vault and a CI/CD
-pipeline are already in place as of Del 8, Azure SQL and Blob Storage as of
-Del 9/10, a background worker as of Del 11, and Service Bus publish/consume
-as of Del 12 — see below — all pulled forward rather than left for later.)
+Planned for later phases (see [Roadmap](#roadmap)): Application Insights,
+Docker, Bicep, and a React frontend. (Key Vault and a CI/CD pipeline are
+already in place as of Del 8, Azure SQL and Blob Storage as of Del 9/10, a
+background worker as of Del 11, Service Bus publish/consume as of Del 12,
+and Redis caching as of Del 13 — see below — all pulled forward rather than
+left for later.)
 
 ## Project structure
 
@@ -134,20 +138,28 @@ ProjectAtlas.sln
 src/
   Atlas.Domain/            Entities, enums, domain exceptions, Permissions/RolePermissions
   Atlas.Application/       DTOs, service interfaces — TicketService, AuthService,
-                           OrganizationService, UserService, ProjectService, TeamService
+                           OrganizationService, UserService, ProjectService, TeamService;
+                           ITicketEventPublisher (Del 12), ITicketStatsCache (Del 13)
   Atlas.Infrastructure/    EF Core DbContext, entity configurations, repositories
                            (Ticket, User, Organization, Project, Team), JwtTokenGenerator,
-                           Pbkdf2PasswordHasher
-  Atlas.Api/                Controllers (Tickets, Auth, Organizations, Users, Projects, Teams),
+                           Pbkdf2PasswordHasher, Messaging/ServiceBusTicketEventPublisher
+                           (Del 12), Caching/RedisTicketStatsCache (Del 13)
+  Atlas.Api/               Controllers (Tickets, Auth, Organizations, Users, Projects, Teams),
                            Program.cs, appsettings
+  Atlas.Worker/            .NET Generic Host (Del 11) — OverdueTicketWorker (polls every
+                           5 minutes) and TicketAssignedConsumer (Del 12, Service Bus)
 tests/
   Atlas.Domain.Tests/       xUnit tests for Ticket's business rules, RolePermissions, User,
                            Organization, Project, Team
 sql/
   001_InitialSchema.sql     Hand-written T-SQL reference (see note below)
   002_SeedData.sql          Optional demo data (Northstar IT / ACME AB / one ticket)
+scripts/
+  test-del13-redis-cache.sh Cache-hit/invalidation/fail-open smoke test for Del 13 (see
+                           the "Try it" section above)
 docs/
   ARCHITECTURE.md
+  AZURE_DEPLOYMENT.md
 ```
 
 ## Data model
@@ -294,7 +306,29 @@ event publish on ticket assignment (best-effort: logged and swallowed on
 failure, see `ServiceBusTicketEventPublisher`) and `Atlas.Worker`'s
 `TicketAssignedConsumer` will simply have nothing to talk to.
 
-### 5. Install and start Azurite (only needed to test file attachments — Del 10)
+### 5. Start Redis (only needed for `GET /api/tickets/stats` caching — Del 13)
+
+Unlike Service Bus above, Redis has a genuine local option — a real Redis
+container, not a stand-in and not production itself:
+
+```bash
+docker run -d --name atlas-redis -p 6379:6379 redis
+```
+
+`appsettings.Development.json` already points `Redis:ConnectionString` at
+`localhost:6379`, so there's nothing else to configure. If you skip this
+step, every other endpoint still works fine, `GET /api/tickets/stats`
+included — `RedisTicketStatsCache` is "fail open" (see
+`docs/ARCHITECTURE.md`'s Del 13 section), so a missing/unreachable Redis
+just means every stats request re-runs its aggregate query against the
+database instead of hitting a warm cache; you'll see a `LogWarning` in the
+console rather than an error. Want to actually see the caching behaviour
+(cache hits, invalidation on a status/priority change, and that a comment or
+an assignment deliberately does *not* invalidate)? Run
+`bash scripts/test-del13-redis-cache.sh` once the API (step 7 below) and a
+real ticket exist.
+
+### 6. Install and start Azurite (only needed to test file attachments — Del 10)
 
 Ticket attachments (`POST /api/tickets/{id}/attachments`) are stored in Azure
 Blob Storage. Locally, that means [Azurite](https://learn.microsoft.com/azure/storage/common/storage-use-azurite) —
@@ -318,7 +352,7 @@ starting in a half-working state. If you don't care about attachments right
 now, you can skip this step entirely — every other endpoint works fine
 without Azurite running; only the two attachment endpoints will fail.
 
-### 6. Run the API
+### 7. Run the API
 
 ```bash
 dotnet run --project src/Atlas.Api
@@ -327,7 +361,7 @@ dotnet run --project src/Atlas.Api
 Swagger UI opens automatically at `https://localhost:5081/swagger` (or
 `http://localhost:5080/swagger`).
 
-### 7. Try it
+### 8. Try it
 
 Every endpoint except `POST /api/auth/register` and `POST /api/auth/login`
 requires a bearer token (see
@@ -452,7 +486,7 @@ curl -X POST "https://localhost:5081/api/teams/<team-guid>/members" -k \
 curl -X DELETE "https://localhost:5081/api/teams/<team-guid>/members/<agent-guid>" -k \
      -H "Authorization: Bearer $TOKEN"
 
-# Upload an attachment (Del 10 — needs Azurite running, see step 4). Note
+# Upload an attachment (Del 10 — needs Azurite running, see step 6). Note
 # -F instead of -d/-H Content-Type: this is a multipart/form-data upload,
 # not JSON: the form field name must be "file".
 curl -X POST "https://localhost:5081/api/tickets/<ticket-guid>/attachments" -k \
@@ -464,9 +498,16 @@ curl -X POST "https://localhost:5081/api/tickets/<ticket-guid>/attachments" -k \
 curl "https://localhost:5081/api/tickets/<ticket-guid>/attachments/<attachment-guid>/download" -k \
      -H "Authorization: Bearer $TOKEN" \
      -o downloaded-screenshot.png
+
+# Dashboard stats (Del 13) — cached in Redis for Redis:StatsCacheTtlSeconds
+# (30s by default); call it twice in a row and compare "generatedAtUtc" to
+# see a cache hit for yourself, or run scripts/test-del13-redis-cache.sh for
+# the full cache-hit/invalidation/fail-open test sequence
+curl "https://localhost:5081/api/tickets/stats" -k \
+     -H "Authorization: Bearer $TOKEN"
 ```
 
-### 8. Run the tests
+### 9. Run the tests
 
 ```bash
 dotnet test
@@ -571,13 +612,20 @@ database.
       mostly just "generalize the Key Vault setup, add a least-privilege
       SQL login"
 - [~] **Phase 4 — Enterprise**: Del 11 (background worker for overdue-ticket
-      notifications) and Del 12 (Azure Service Bus, real-time
-      `TicketAssigned` notifications) both confirmed working end-to-end
-      (2026-09-11) — a second host process, `Atlas.Worker` (.NET Generic
+      notifications), Del 12 (Azure Service Bus, real-time
+      `TicketAssigned` notifications), and Del 13 (Redis cache-aside for
+      `GET /api/tickets/stats`) all confirmed working end-to-end locally
+      (2026-09-11/12) — a second host process, `Atlas.Worker` (.NET Generic
       Host, not ASP.NET Core), polls every 5 minutes for overdue tickets
       *and* consumes Service Bus events `Atlas.Api` publishes on ticket
       assignment, writing to the same `Notifications` table through
-      `AtlasDb` either way; Redis and audit logging remain
+      `AtlasDb` either way; a new dashboard query, ticket counts by status
+      and priority, is cached in Redis with explicit invalidation on the
+      writes that actually change it (status, priority, create, delete —
+      deliberately *not* assignment or comments); audit logging (Del 15)
+      remains, as does deciding `Atlas.Worker`'s Azure hosting shape and
+      provisioning an actual Azure Cache for Redis instance (see
+      `docs/AZURE_DEPLOYMENT.md` sections 9–10)
 - [ ] **Phase 5 — Quality**: broader test suite, Docker, structured logging, monitoring
 - [ ] **Phase 6 — DevOps**: Bicep (Infrastructure as Code) — CI/CD itself
       already exists as of Del 8, on Azure Pipelines
