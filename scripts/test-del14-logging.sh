@@ -134,13 +134,24 @@ fi
 echo "TEST 1: Startar Atlas.Api med en (påhittad) ApplicationInsights:ConnectionString satt ..."
 FAKE_AI_CONNECTION_STRING="InstrumentationKey=00000000-0000-0000-0000-000000000000;IngestionEndpoint=https://swedencentral-1.in.applicationinsights.azure.com/"
 : > "$LOG_FILE"
-# --contentRoot pekar den körande DLL:en tillbaka på src/Atlas.Api (där
-# appsettings.json faktiskt ligger) utan att skriptet behöver byta katalog
-# (cd) inne i en bakgrunds-subshell — det senare gör den fångade $!-PID:en
-# opålitlig att döda rent, eftersom det då blir oklart om PID:en pekar på
-# subshellen eller på dotnet-processen den till slut kör.
-ApplicationInsights__ConnectionString="$FAKE_AI_CONNECTION_STRING" \
-  dotnet "$API_DLL" --urls "$BASE_URL" --contentRoot "$API_PROJECT" >>"$LOG_FILE" 2>&1 &
+# Ingen --contentRoot behövs (en tidigare version av det här skriptet
+# skickade in en relativ sådan, "src/Atlas.Api" — och kraschade:
+# HostBuilder löser upp en RELATIV --contentRoot mot AppContext.BaseDirectory
+# (DLL:ens egen mapp, bin/Debug/net10.0), inte mot skriptets arbetskatalog,
+# vilket gav den absurda C:\...\bin\Debug\net10.0\src\Atlas.Api\ och en
+# DirectoryNotFoundException direkt i WebApplication.CreateBuilder). Utan
+# argumentet alls faller ContentRootPath tillbaka på just
+# AppContext.BaseDirectory — och där ligger redan appsettings.json/
+# appsettings.Development.json, kopierade dit av bygget precis som de
+# hamnar där när `dotnet run` startar samma DLL. ASPNETCORE_ENVIRONMENT sätts
+# uttryckligen till Development eftersom vi kringgår launchSettings.json (det
+# är den filen, inte något dotnet gör automatiskt, som normalt sätter den
+# miljövariabeln åt `dotnet run`) — utan den hade appsettings.Development.json
+# aldrig lästs in, och appen hade startat mot den tomma
+# ConnectionStrings:AtlasDb i appsettings.json i stället för din LocalDB.
+ASPNETCORE_ENVIRONMENT=Development \
+  ApplicationInsights__ConnectionString="$FAKE_AI_CONNECTION_STRING" \
+  dotnet "$API_DLL" --urls "$BASE_URL" >>"$LOG_FILE" 2>&1 &
 API_PID=$!
 
 waited=0

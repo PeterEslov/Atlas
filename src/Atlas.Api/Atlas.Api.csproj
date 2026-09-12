@@ -72,11 +72,21 @@
       referenced directly since Program.cs constructs a TelemetryConfiguration
       itself) is the second sink, wired up only when
       ApplicationInsights:ConnectionString is actually set — see Program.cs.
+
+      Microsoft.ApplicationInsights is pinned to 2.23.0, not whatever the
+      newest 3.x release is, because Serilog.Sinks.ApplicationInsights 5.0.1
+      itself declares a dependency constraint of ">= 2.23.0 && < 3.0.0" — an
+      initial pin at 3.1.2 built fine but produced a real NU1608 warning
+      ("resolved outside of dependency constraint") on Peter's machine,
+      which is NuGet correctly flagging that the sink has never been tested
+      against the 3.x line and its behavior there is unverified, not a
+      cosmetic warning to silence. 2.23.0 is the newest version that actually
+      satisfies the sink's own declared range.
     -->
     <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageReference Include="Serilog.Settings.Configuration" Version="10.0.1" />
     <PackageReference Include="Serilog.Sinks.ApplicationInsights" Version="5.0.1" />
-    <PackageReference Include="Microsoft.ApplicationInsights" Version="3.1.2" />
+    <PackageReference Include="Microsoft.ApplicationInsights" Version="2.23.0" />
   </ItemGroup>
 
 </Project>
