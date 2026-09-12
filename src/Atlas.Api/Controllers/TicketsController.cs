@@ -57,6 +57,28 @@ public sealed class TicketsController : ControllerBase
         return Ok(result);
     }
 
+    /// <summary>
+    /// GET /api/tickets/stats — aggregate ticket counts (by status, by
+    /// priority, plus how many are overdue) for the caller's own
+    /// organization. This one query is Del 13's whole reason for existing:
+    /// see TicketService.GetStatsAsync for the Redis cache-aside logic in
+    /// front of it. The literal "stats" route segment can never collide with
+    /// the {id:guid}-constrained route just below it — "stats" is never a
+    /// valid Guid — so declaration order here is purely for readability, not
+    /// routing correctness.
+    /// </summary>
+    [HttpGet("stats")]
+    [Authorize(Policy = Permissions.TicketRead)]
+    [ProducesResponseType(typeof(TicketStatsDto), StatusCodes.Status200OK)]
+    public async Task<ActionResult<TicketStatsDto>> GetStats(CancellationToken cancellationToken)
+    {
+        var organizationId = _currentUserService.OrganizationId
+            ?? throw new AuthenticationException("The request's access token did not contain a valid organization id.");
+
+        var stats = await _ticketService.GetStatsAsync(organizationId, cancellationToken);
+        return Ok(stats);
+    }
+
     [HttpGet("{id:guid}")]
     [Authorize(Policy = Permissions.TicketRead)]
     [ProducesResponseType(typeof(TicketDetailDto), StatusCodes.Status200OK)]

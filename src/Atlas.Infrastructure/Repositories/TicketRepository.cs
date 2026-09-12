@@ -34,6 +34,67 @@ public sealed class TicketRepository : ITicketRepository
         return await query.FirstOrDefaultAsync(t => t.Id == id, cancellationToken);
     }
 
+    /// <summary>
+    /// Backs GET /api/tickets/stats (Del 13). Three small aggregate queries —
+    /// status counts, priority counts, an overdue count — rather than one
+    /// query that pulls every one of the organization's tickets into memory
+    /// and counts them in C#: GROUP BY/COUNT(*) runs server-side in Azure
+    /// SQL, so this costs roughly the same whether the organization has 50
+    /// tickets or 50,000. Nothing here materializes a Ticket entity at all
+    /// (every query below projects straight to an anonymous type), so there's
+    /// no change-tracking overhead to opt out of with AsNoTracking either —
+    /// there's simply nothing for the change tracker to track.
+    /// </summary>
+    public async Task<TicketStatsDto> GetStatsAsync(Guid organizationId, CancellationToken cancellationToken)
+    {
+        var baseQuery = _dbContext.Tickets.Where(t => t.OrganizationId == organizationId);
+
+        var statusCounts = await baseQuery
+            .GroupBy(t => t.Status)
+            .Select(g => new { Status = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(g => g.Status, g => g.Count, cancellationToken);
+
+        var priorityCounts = await baseQuery
+            .GroupBy(t => t.Priority)
+            .Select(g => new { Priority = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(g => g.Priority, g => g.Count, cancellationToken);
+
+        // Same overdue definition as GetOverdueAsync below and Ticket.IsOverdue
+        // itself, minus GetOverdueAsync's extra "AssignedToUserId != null"
+        // filter: that filter exists there because the background worker only
+        // cares about tickets it can actually notify someone about, while a
+        // dashboard count should reflect the raw fact "N tickets are overdue",
+        // assigned or not.
+        var now = DateTime.UtcNow;
+        var overdueCount = await baseQuery
+            .Where(t => t.DueAtUtc != null
+                && t.DueAtUtc < now
+                && t.Status != Domain.Enums.TicketStatus.Resolved
+                && t.Status != Domain.Enums.TicketStatus.Closed
+                && t.Status != Domain.Enums.TicketStatus.Cancelled)
+            .CountAsync(cancellationToken);
+
+        int StatusCount(Domain.Enums.TicketStatus status) => statusCounts.TryGetValue(status, out var count) ? count : 0;
+        int PriorityCount(Domain.Enums.TicketPriority priority) => priorityCounts.TryGetValue(priority, out var count) ? count : 0;
+
+        return new TicketStatsDto(
+            OrganizationId: organizationId,
+            TotalCount: statusCounts.Values.Sum(),
+            NewCount: StatusCount(Domain.Enums.TicketStatus.New),
+            OpenCount: StatusCount(Domain.Enums.TicketStatus.Open),
+            InProgressCount: StatusCount(Domain.Enums.TicketStatus.InProgress),
+            OnHoldCount: StatusCount(Domain.Enums.TicketStatus.OnHold),
+            ResolvedCount: StatusCount(Domain.Enums.TicketStatus.Resolved),
+            ClosedCount: StatusCount(Domain.Enums.TicketStatus.Closed),
+            CancelledCount: StatusCount(Domain.Enums.TicketStatus.Cancelled),
+            LowPriorityCount: PriorityCount(Domain.Enums.TicketPriority.Low),
+            MediumPriorityCount: PriorityCount(Domain.Enums.TicketPriority.Medium),
+            HighPriorityCount: PriorityCount(Domain.Enums.TicketPriority.High),
+            CriticalPriorityCount: PriorityCount(Domain.Enums.TicketPriority.Critical),
+            OverdueCount: overdueCount,
+            GeneratedAtUtc: now);
+    }
+
     public async Task<(IReadOnlyList<Ticket> Items, int TotalCount)> SearchAsync(TicketListQuery query, CancellationToken cancellationToken)
     {
         IQueryable<Ticket> filtered = _dbContext.Tickets.AsNoTracking();

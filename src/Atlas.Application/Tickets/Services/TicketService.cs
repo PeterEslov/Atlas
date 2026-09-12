@@ -20,14 +20,16 @@ public sealed class TicketService : ITicketService
     private readonly IUnitOfWork _unitOfWork;
     private readonly IBlobStorageService _blobStorageService;
     private readonly ITicketEventPublisher _ticketEventPublisher;
+    private readonly ITicketStatsCache _ticketStatsCache;
     private readonly ILogger<TicketService> _logger;
 
-    public TicketService(ITicketRepository ticketRepository, IUnitOfWork unitOfWork, IBlobStorageService blobStorageService, ITicketEventPublisher ticketEventPublisher, ILogger<TicketService> logger)
+    public TicketService(ITicketRepository ticketRepository, IUnitOfWork unitOfWork, IBlobStorageService blobStorageService, ITicketEventPublisher ticketEventPublisher, ITicketStatsCache ticketStatsCache, ILogger<TicketService> logger)
     {
         _ticketRepository = ticketRepository;
         _unitOfWork = unitOfWork;
         _blobStorageService = blobStorageService;
         _ticketEventPublisher = ticketEventPublisher;
+        _ticketStatsCache = ticketStatsCache;
         _logger = logger;
     }
 
@@ -38,6 +40,34 @@ public sealed class TicketService : ITicketService
 
         var dtos = items.Select(ToDto).ToList();
         return new PagedResult<TicketDto>(dtos, normalizedQuery.Page, normalizedQuery.PageSize, totalCount);
+    }
+
+    /// <summary>
+    /// Cache-aside (Del 13): check Redis first; on a hit, return it straight
+    /// away without ever touching Azure SQL. On a miss (nothing cached, the
+    /// TTL expired, or Redis itself is down — ITicketStatsCache.GetAsync
+    /// treats all three the same), fall through to the real GROUP BY query
+    /// and populate the cache for the next caller before returning. This is
+    /// "cache-aside" specifically (as opposed to e.g. a write-through cache)
+    /// because the cache is populated lazily, on read, rather than eagerly
+    /// every time the underlying data changes — a write only ever *evicts*
+    /// the stale entry (see InvalidateStatsCacheAsync below), it never
+    /// computes and pushes a fresh one itself.
+    /// </summary>
+    public async Task<TicketStatsDto> GetStatsAsync(Guid organizationId, CancellationToken cancellationToken)
+    {
+        var cached = await _ticketStatsCache.GetAsync(organizationId, cancellationToken);
+        if (cached is not null)
+        {
+            _logger.LogDebug("Ticket stats cache hit for organization {OrganizationId}", organizationId);
+            return cached;
+        }
+
+        _logger.LogDebug("Ticket stats cache miss for organization {OrganizationId} — querying the database", organizationId);
+        var stats = await _ticketRepository.GetStatsAsync(organizationId, cancellationToken);
+
+        await _ticketStatsCache.SetAsync(organizationId, stats, cancellationToken);
+        return stats;
     }
 
     public async Task<TicketDetailDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken)
@@ -61,6 +91,12 @@ public sealed class TicketService : ITicketService
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         _logger.LogInformation("Ticket {TicketId} created by user {UserId}", ticket.Id, createdByUserId);
+
+        // A new ticket changes the organization's stats (TotalCount and its
+        // New-status count both go up), so the cached snapshot is now stale —
+        // evict it rather than wait out the TTL. See InvalidateStatsCacheAsync.
+        await InvalidateStatsCacheAsync(ticket.OrganizationId, cancellationToken);
+
         return ToDetailDto(ticket);
     }
 
@@ -89,6 +125,11 @@ public sealed class TicketService : ITicketService
             DateTime.UtcNow);
         await _ticketEventPublisher.PublishTicketAssignedAsync(@event, cancellationToken);
 
+        // Deliberately NOT followed by InvalidateStatsCacheAsync: TicketStatsDto
+        // counts by status, by priority, and overdue — none of which an
+        // assignment touches (who a ticket is assigned to isn't one of its
+        // counted dimensions). Invalidating here would just be extra Redis
+        // round-trips for a write the cached snapshot was never wrong about.
         return ToDetailDto(ticket);
     }
 
@@ -100,6 +141,12 @@ public sealed class TicketService : ITicketService
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         _logger.LogInformation("Ticket {TicketId} status changed to {Status} by {ActorUserId}", ticketId, request.Status, actorUserId);
+
+        // A status change moves a ticket between the counted status buckets
+        // (and can also flip it in or out of the overdue count), so the
+        // cached stats snapshot is stale the instant this commits.
+        await InvalidateStatsCacheAsync(ticket.OrganizationId, cancellationToken);
+
         return ToDetailDto(ticket);
     }
 
@@ -111,6 +158,10 @@ public sealed class TicketService : ITicketService
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         _logger.LogInformation("Ticket {TicketId} priority changed to {Priority} by {ActorUserId}", ticketId, request.Priority, actorUserId);
+
+        // Same reasoning as ChangeStatusAsync above, for the priority buckets.
+        await InvalidateStatsCacheAsync(ticket.OrganizationId, cancellationToken);
+
         return ToDetailDto(ticket);
     }
 
@@ -133,6 +184,11 @@ public sealed class TicketService : ITicketService
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         _logger.LogInformation("Ticket {TicketId} reopened by {ActorUserId}", ticketId, actorUserId);
+
+        // Reopening is itself a status change (Closed/Cancelled -> Open) —
+        // same reasoning as ChangeStatusAsync above.
+        await InvalidateStatsCacheAsync(ticket.OrganizationId, cancellationToken);
+
         return ToDetailDto(ticket);
     }
 
@@ -187,6 +243,12 @@ public sealed class TicketService : ITicketService
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         _logger.LogInformation("Ticket {TicketId} permanently deleted", ticketId);
+
+        // A deleted ticket disappears from TotalCount and its status/priority
+        // bucket alike — read ticket.OrganizationId before this point, since
+        // Remove() only marks the tracked entity for deletion, it doesn't
+        // clear the in-memory object's own properties.
+        await InvalidateStatsCacheAsync(ticket.OrganizationId, cancellationToken);
     }
 
     /// <summary>
@@ -267,6 +329,18 @@ public sealed class TicketService : ITicketService
         attachment.SizeInBytes,
         attachment.UploadedByUserId,
         attachment.CreatedAtUtc);
+
+    /// <summary>
+    /// Evicts the cached ticket-stats snapshot for one organization. A thin
+    /// wrapper around ITicketStatsCache.InvalidateAsync rather than calling it
+    /// directly at each of the five call sites above purely so each of those
+    /// call sites reads as "this write invalidates stats" without repeating
+    /// the field name — see the doc comment on each caller for *why* that
+    /// particular write needs it (and, for AssignAsync, why it deliberately
+    /// doesn't).
+    /// </summary>
+    private Task InvalidateStatsCacheAsync(Guid organizationId, CancellationToken cancellationToken) =>
+        _ticketStatsCache.InvalidateAsync(organizationId, cancellationToken);
 
     private async Task<Ticket> GetTicketOrThrowAsync(Guid ticketId, CancellationToken cancellationToken)
     {

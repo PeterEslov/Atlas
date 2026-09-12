@@ -17,6 +17,16 @@ public interface ITicketRepository
     Task<(IReadOnlyList<Ticket> Items, int TotalCount)> SearchAsync(TicketListQuery query, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Aggregate ticket counts for one organization — status counts, priority
+    /// counts, and how many are currently overdue (Del 13). Computed with
+    /// GROUP BY/COUNT queries directly in SQL (see TicketRepository), never
+    /// by loading every ticket into memory and counting in C# — exactly the
+    /// expensive-if-repeated query this Del's Redis cache exists to avoid
+    /// re-running on every dashboard refresh.
+    /// </summary>
+    Task<TicketStatsDto> GetStatsAsync(Guid organizationId, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Every ticket that is currently overdue (a past due date, not yet
     /// Resolved/Closed/Cancelled) AND assigned to someone — an unassigned
     /// ticket has nobody to notify, so it's filtered out here rather than by

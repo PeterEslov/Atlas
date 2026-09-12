@@ -1,4 +1,5 @@
 using Atlas.Application.Common.Interfaces;
+using Atlas.Infrastructure.Caching;
 using Atlas.Infrastructure.Messaging;
 using Atlas.Infrastructure.Persistence;
 using Atlas.Infrastructure.Repositories;
@@ -18,19 +19,22 @@ namespace Atlas.Infrastructure;
 /// Composition root for the infrastructure layer. Called once from Atlas.Api's
 /// Program.cs — nothing outside this file should new up a DbContext or repository.
 ///
-/// Split into four composable pieces (Del 11 split off three; Del 12 added
-/// the fourth) rather than one monolithic AddInfrastructure: Atlas.Api needs
-/// all four (persistence, blob storage, auth, messaging), but Atlas.Worker —
-/// a second host process that reads tickets, writes notifications, and now
-/// also consumes Service Bus events — needs only AddPersistence and
-/// AddMessaging, never Blob Storage or JWT auth. Before the Del 11 split,
-/// giving the worker anything at all meant calling the full
-/// AddInfrastructure(), which would have forced it to also carry
-/// BlobStorage:*/Jwt:* configuration (and crash at startup without it, per
-/// the fail-fast checks below) for systems it never touches.
+/// Split into five composable pieces (Del 11 split off three; Del 12 added a
+/// fourth; Del 13 added this one) rather than one monolithic
+/// AddInfrastructure: Atlas.Api needs all five (persistence, blob storage,
+/// auth, messaging, caching), but Atlas.Worker — a second host process that
+/// reads tickets, writes notifications, and consumes Service Bus events —
+/// needs only AddPersistence and AddMessaging, never Blob Storage, JWT auth,
+/// or the Redis cache (it never serves GET /api/tickets/stats, since it
+/// doesn't even reference ITicketService/TicketService at all — see
+/// AddCaching's own doc comment). Before the Del 11 split, giving the worker
+/// anything at all meant calling the full AddInfrastructure(), which would
+/// have forced it to also carry configuration (and crash at startup without
+/// it, per the fail-fast checks below) for systems it never touches.
 /// AddInfrastructure itself is unchanged from Atlas.Api's point of view — it
 /// still wires up everything, in the same order, so Program.cs there needed
-/// no changes at all when Del 12 added AddMessaging to the list either.
+/// no changes at all when Del 12 added AddMessaging, or now when Del 13 adds
+/// AddCaching, to the list.
 /// </summary>
 public static class DependencyInjection
 {
@@ -40,6 +44,7 @@ public static class DependencyInjection
         services.AddBlobStorage(configuration);
         services.AddAuthInfrastructure(configuration);
         services.AddMessaging(configuration);
+        services.AddCaching(configuration);
 
         return services;
     }
@@ -241,6 +246,66 @@ public static class DependencyInjection
 
         services.AddSingleton(serviceBusClient);
         services.AddScoped<ITicketEventPublisher, ServiceBusTicketEventPublisher>();
+
+        return services;
+    }
+
+    /// <summary>
+    /// Redis-backed cache-aside for GET /api/tickets/stats (Del 13). Only
+    /// Atlas.Api needs this — the same "only the host that actually has the
+    /// feature gets the registration" rule AddBlobStorage/AddAuthInfrastructure
+    /// already follow above: ITicketStatsCache is only ever injected into
+    /// TicketService, and TicketService itself is only registered in
+    /// Atlas.Api's Program.cs (Atlas.Worker's own Program.cs never references
+    /// it — it only needs OverdueTicketNotificationService and
+    /// TicketAssignedConsumer).
+    ///
+    /// Unlike Del 12's Service Bus — no first-party local emulator, so local
+    /// development there deliberately talks to the same real Azure namespace
+    /// production uses — Redis has a genuine local option: a plain
+    /// "docker run -p 6379:6379 redis" container speaks the exact same RESP
+    /// wire protocol a real Redis server does. So, like LocalDB (SQL) and
+    /// Azurite (Blob Storage) before it, local development here runs against
+    /// something real, not a fake and not production itself. That's why
+    /// Redis:ConnectionString is a single config key that means
+    /// "localhost:6379, no auth" in appsettings.Development.json and "the
+    /// real Azure Cache for Redis instance, with its access key baked into
+    /// the connection string" in Azure — the same one-key-does-both-
+    /// environments idiom as BlobStorage:ConnectionString locally vs.
+    /// AccountUrl+managed identity in Azure, except there's no managed-
+    /// identity branch to add here: classic (non-Enterprise) Azure Cache for
+    /// Redis only supports key-based auth, so unlike Blob Storage and Service
+    /// Bus, there's no DefaultAzureCredential path available at all yet. See
+    /// the "Known simplifications" note in docs/ARCHITECTURE.md — a
+    /// deliberate, documented gap (a Del 20 candidate alongside the other
+    /// Key-Vault/RBAC generalization work), not an oversight.
+    ///
+    /// AddStackExchangeRedisCache registers IDistributedCache, backed by a
+    /// StackExchange.Redis connection it manages internally (its own
+    /// connection pooling/reconnect logic — the same idea as ServiceBusClient
+    /// or BlobContainerClient above being registered once and shared for the
+    /// app's lifetime). Nothing in this project talks to StackExchange.Redis's
+    /// own client types directly — RedisTicketStatsCache only ever sees the
+    /// IDistributedCache abstraction, which is all a single get/set/remove-by-
+    /// key cache-aside store needs (see its own doc comment for why that's
+    /// enough, and why a Redis outage must never turn into a failed request).
+    /// </summary>
+    public static IServiceCollection AddCaching(this IServiceCollection services, IConfiguration configuration)
+    {
+        var redisConnectionString = configuration["Redis:ConnectionString"]
+            ?? throw new InvalidOperationException(
+                "Configuration value 'Redis:ConnectionString' was not found. Set it in " +
+                "appsettings.Development.json to 'localhost:6379' (a local Redis container started " +
+                "with 'docker run -p 6379:6379 redis' — see README.md 'Kom igång') or, in Azure, to " +
+                "the Azure Cache for Redis connection string (see docs/AZURE_DEPLOYMENT.md section 10).");
+
+        services.AddStackExchangeRedisCache(options =>
+        {
+            options.Configuration = redisConnectionString;
+            options.InstanceName = "atlas:";
+        });
+
+        services.AddScoped<ITicketStatsCache, RedisTicketStatsCache>();
 
         return services;
     }

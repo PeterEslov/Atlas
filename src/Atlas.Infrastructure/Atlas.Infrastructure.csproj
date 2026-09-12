@@ -49,6 +49,14 @@
     <PackageReference Include="Azure.Messaging.ServiceBus" Version="7.20.2" />
 
     <!--
+      Redis cache for GET /api/tickets/stats (Del 13) — see RedisTicketStatsCache
+      and the "Caching" block in DependencyInjection.AddCaching. Registers
+      IDistributedCache backed by a real StackExchange.Redis connection; nothing
+      else in the project depends on StackExchange.Redis directly.
+    -->
+    <PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" Version="10.0.0" />
+
+    <!--
       Explicit override for NU1903 (CVE-2026-50648, GHSA-23rf-6693-g89p): one of
       the packages above pulls in System.Security.Cryptography.Xml 9.0.0
       transitively, which is below the patched floor for both the 9.x line

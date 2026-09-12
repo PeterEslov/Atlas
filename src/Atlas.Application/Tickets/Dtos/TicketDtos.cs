@@ -102,3 +102,40 @@ public sealed class TicketListQuery
 
     public const int MaxPageSize = 100;
 }
+
+/// <summary>
+/// Aggregate ticket counts for one organization — returned by
+/// GET /api/tickets/stats and the entire reason Del 13 exists: this is the
+/// "dashboard query" that gets cached in Redis (see ITicketStatsCache /
+/// RedisTicketStatsCache) instead of re-running its GROUP BY queries against
+/// Azure SQL on every single request.
+///
+/// Deliberately flat, explicitly named counts rather than something like
+/// Dictionary&lt;TicketStatus,int&gt;: a dashboard, curl, or Swagger reads
+/// named fields directly, with no enum-keyed dictionary to unpack — and it
+/// sidesteps ever having to think about how System.Text.Json serializes a
+/// non-string dictionary key in the first place.
+///
+/// GeneratedAtUtc is when this snapshot was computed, not when it was
+/// returned — on a cache hit, it can be (up to) Redis:StatsCacheTtlSeconds
+/// old, which is exactly the trade-off a cache makes on purpose: slightly
+/// stale data in exchange for not hitting the database every time. It's
+/// included specifically so a caller (or Peter, testing this by hand) can
+/// tell a cache hit from a cache miss just by looking at the response.
+/// </summary>
+public sealed record TicketStatsDto(
+    Guid OrganizationId,
+    int TotalCount,
+    int NewCount,
+    int OpenCount,
+    int InProgressCount,
+    int OnHoldCount,
+    int ResolvedCount,
+    int ClosedCount,
+    int CancelledCount,
+    int LowPriorityCount,
+    int MediumPriorityCount,
+    int HighPriorityCount,
+    int CriticalPriorityCount,
+    int OverdueCount,
+    DateTime GeneratedAtUtc);

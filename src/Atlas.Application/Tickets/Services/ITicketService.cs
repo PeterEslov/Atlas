@@ -7,6 +7,13 @@ public interface ITicketService
 {
     Task<PagedResult<TicketDto>> SearchAsync(TicketListQuery query, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Dashboard ticket counts for one organization (Del 13) — cache-aside via
+    /// ITicketStatsCache in front of ITicketRepository.GetStatsAsync. See the
+    /// implementation's doc comment for the cache-hit/cache-miss flow.
+    /// </summary>
+    Task<TicketStatsDto> GetStatsAsync(Guid organizationId, CancellationToken cancellationToken);
+
     Task<TicketDetailDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken);
 
     Task<TicketDetailDto> CreateAsync(CreateTicketRequest request, Guid createdByUserId, CancellationToken cancellationToken);
