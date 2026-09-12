@@ -80,11 +80,22 @@ public sealed class AuthService : IAuthService
         {
             // Same message whether the email doesn't exist or the password is wrong —
             // never reveal which one it was, that's a user-enumeration vulnerability.
+            // The log line below is allowed to be more specific than the exception
+            // message the caller ever sees (Del 14) — it never leaves this process,
+            // and repeated failed attempts against the same {Email} is exactly the
+            // kind of signal worth having queryable once this reaches Application
+            // Insights, without exposing anything to whoever's actually guessing.
+            // Before Del 14, a failed login produced no log line at all: the
+            // AuthenticationException it throws is caught by
+            // ExceptionHandlingMiddleware's dedicated 401 branch, which — unlike
+            // its catch-all Exception branch — never logged anything either.
+            _logger.LogWarning("Failed login attempt for {Email}: invalid credentials", request.Email);
             throw new AuthenticationException("Invalid email or password.");
         }
 
         if (!user.IsActive)
         {
+            _logger.LogWarning("Failed login attempt for {Email}: account {UserId} is deactivated", request.Email, user.Id);
             throw new AuthenticationException("This account has been deactivated.");
         }
 

@@ -58,6 +58,25 @@
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
+
+    <!--
+      Del 14: structured logging. Serilog.AspNetCore is the meta-package that
+      brings in Serilog itself, the ASP.NET Core hosting integration
+      (UseSerilog, UseSerilogRequestLogging) and a console sink — everything
+      needed for the "replace the default logging providers, keep every
+      existing ILogger<T> call site unchanged" story in Program.cs.
+      Serilog.Settings.Configuration is what makes ReadFrom.Configuration(...)
+      resolve (NOT bundled into Serilog.AspNetCore, unlike the console sink —
+      confirmed by checking its actual dependency list rather than assuming).
+      Serilog.Sinks.ApplicationInsights (+ Microsoft.ApplicationInsights,
+      referenced directly since Program.cs constructs a TelemetryConfiguration
+      itself) is the second sink, wired up only when
+      ApplicationInsights:ConnectionString is actually set — see Program.cs.
+    -->
+    <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
+    <PackageReference Include="Serilog.Settings.Configuration" Version="10.0.1" />
+    <PackageReference Include="Serilog.Sinks.ApplicationInsights" Version="5.0.1" />
+    <PackageReference Include="Microsoft.ApplicationInsights" Version="3.1.2" />
   </ItemGroup>
 
 </Project>
