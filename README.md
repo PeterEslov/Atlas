@@ -126,13 +126,18 @@ Principle, not just a folder convention.
 - **System-wide audit trail** (`GET /api/audit-logs`) — no new technology:
   `AuditLogs` reuses the same Azure SQL database every other table already
   lives in; see [Del 15](#roadmap) below
+- **Structured logging** (`Serilog.AspNetCore`, console sink locally) with an
+  optional **Application Insights** sink (`Serilog.Sinks.ApplicationInsights`,
+  wired up only when `ApplicationInsights:ConnectionString` is set) — see
+  [Del 14](#roadmap) below
 
-Planned for later phases (see [Roadmap](#roadmap)): Application Insights,
-Docker, Bicep, and a React frontend. (Key Vault and a CI/CD pipeline are
-already in place as of Del 8, Azure SQL and Blob Storage as of Del 9/10, a
-background worker as of Del 11, Service Bus publish/consume as of Del 12,
-Redis caching as of Del 13, and the audit trail as of Del 15 — see below —
-all pulled forward rather than left for later.)
+Planned for later phases (see [Roadmap](#roadmap)): Docker, Bicep, and a
+React frontend. (Key Vault and a CI/CD pipeline are already in place as of
+Del 8, Azure SQL and Blob Storage as of Del 9/10, a background worker as of
+Del 11, Service Bus publish/consume as of Del 12, Redis caching as of
+Del 13, structured logging with an optional Application Insights sink as of
+Del 14, and the audit trail as of Del 15 — see below — all pulled forward
+rather than left for later.)
 
 ## Project structure
 
@@ -150,7 +155,8 @@ src/
                            (Del 12), Caching/RedisTicketStatsCache (Del 13),
                            Repositories/AuditLogRepository (Del 15)
   Atlas.Api/               Controllers (Tickets, Auth, Organizations, Users, Projects, Teams,
-                           AuditLogs), Program.cs, appsettings
+                           AuditLogs), Program.cs (Del 14: two-stage Serilog
+                           bootstrap + UseSerilogRequestLogging), appsettings
   Atlas.Worker/            .NET Generic Host (Del 11) — OverdueTicketWorker (polls every
                            5 minutes) and TicketAssignedConsumer (Del 12, Service Bus)
 tests/
@@ -162,6 +168,9 @@ sql/
 scripts/
   test-del13-redis-cache.sh Cache-hit/invalidation/fail-open smoke test for Del 13 (see
                            the "Try it" section above)
+  test-del14-logging.sh    End-to-end smoke test for Del 14 — Serilog's console format,
+                           UseSerilogRequestLogging, and the new WRN-level failed-login
+                           log lines, run by starting Atlas.Api's built DLL directly
   test-del15-audit-log.sh  End-to-end smoke test for Del 15 — 7 checks across
                            User/Organization/Project/Ticket audit events plus the
                            Admin-only access check (see the "Try it" section above)
@@ -650,7 +659,14 @@ database.
       the Azure side: deciding `Atlas.Worker`'s Azure hosting shape and
       provisioning an actual Azure Cache for Redis instance (see
       `docs/AZURE_DEPLOYMENT.md` sections 9–10)
-- [ ] **Phase 5 — Quality**: broader test suite, Docker, structured logging, monitoring
+- [~] **Phase 5 — Quality**: Del 14 (Serilog console logging with an optional
+      Application Insights sink, scoped to Atlas.Api) confirmed working
+      end-to-end locally (2026-09-12) via `scripts/test-del14-logging.sh` —
+      the app already had extensive `ILogger<T>` call sites throughout the
+      service layer, so Del 14 was mostly a logging-*engine* swap plus one
+      genuine gap it closed (failed login attempts previously produced no
+      log line at all, now a `LogWarning` either way). Still open in this
+      phase: a broader test suite (Del 16) and Docker (Del 17)
 - [ ] **Phase 6 — DevOps**: Bicep (Infrastructure as Code) — CI/CD itself
       already exists as of Del 8, on Azure Pipelines
 - [ ] **Phase 7 — Polish**: React frontend, dashboard, demo environment

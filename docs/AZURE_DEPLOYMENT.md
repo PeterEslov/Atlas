@@ -777,6 +777,85 @@ cachar mot den riktiga Azure Cache for Redis-instansen, inte bara att
 endpointen svarar. Samma metodik som `scripts/test-del13-redis-cache.sh`
 redan använder lokalt, bara mot `$WEBAPP_NAME` istället för `localhost`.
 
+## 11. Del 14: Application Insights (öppen, se nedan)
+
+Samma sak som avsnitt 9 och 10 gäller här: det här är en plan att följa när
+du är redo, inte en logg över redan utfört arbete. Del 14 (Serilog +
+valfritt Application Insights-sink, se `docs/ARCHITECTURE.md`s Del
+14-avsnitt) är klar och verifierad **lokalt** via
+`scripts/test-del14-logging.sh` — men bara med en påhittad
+`ApplicationInsights:ConnectionString` som bevisar att koden inte kraschar
+när sinket slås på, inte att telemetri faktiskt når en riktig Azure-resurs.
+Ingen Application Insights-resurs finns provisionerad i prenumerationen än.
+
+### 11.1 Skapa en Application Insights-resurs
+
+```bash
+# Ny terminal sedan tidigare avsnitt? Sätt om RG också.
+APPINSIGHTS_NAME=appi-projectatlas-dev-sc
+
+az monitor app-insights component create \
+  --app "$APPINSIGHTS_NAME" \
+  --location swedencentral \
+  --resource-group "$RG" \
+  --application-type web
+```
+
+(Kräver Azure CLI-tillägget `application-insights` — `az extension add
+--name application-insights` om kommandot ovan säger att det inte
+hittas.)
+
+### 11.2 Peka App Service mot resursen
+
+Till skillnad från Redis anslutningssträng (avsnitt 10.2) är en Application
+Insights-**connection string** inte en hemlighet i samma mening som en
+databas- eller cache-lösenord: den ger ingen läsbehörighet till något Atlas
+själv skyddar, bara skrivbehörighet att skicka *ny* telemetri till just den
+här resursen — värsta tänkbara missbruk är någon som skickar in skräptelemetri,
+inte ett dataintrång. Samma resonemang som `BlobStorage:AccountUrl` (avsnitt
+8.3) och `ServiceBus:FullyQualifiedNamespace` (avsnitt 9.1): en vanlig
+Application Setting, inte Key Vault.
+
+```bash
+APPINSIGHTS_CONNECTION_STRING=$(az monitor app-insights component show \
+  --app "$APPINSIGHTS_NAME" --resource-group "$RG" \
+  --query connectionString -o tsv)
+echo "APPINSIGHTS_CONNECTION_STRING=$APPINSIGHTS_CONNECTION_STRING"   # ska inte vara tom
+
+az webapp config appsettings set \
+  --name "$WEBAPP_NAME" \
+  --resource-group "$RG" \
+  --settings ApplicationInsights__ConnectionString="$APPINSIGHTS_CONNECTION_STRING"
+
+az webapp restart --name "$WEBAPP_NAME" --resource-group "$RG"
+```
+
+Ingen kodändring behövs för det här steget — `Program.cs`s
+`UseSerilog`-block läser redan `ApplicationInsights:ConnectionString` ur
+konfigurationen och kopplar bara in Application Insights-sinket när värdet
+faktiskt är satt (se `docs/ARCHITECTURE.md`). Att sätta App Setting:en ovan
+och starta om App Service är hela driftsättningen.
+
+### 11.3 Verifiera
+
+```bash
+curl "https://$WEBAPP_NAME.azurewebsites.net/health"
+# generera lite trafik att leta efter i Application Insights
+```
+
+I Azure-portalen: din Application Insights-resurs → **Live metrics** (näst
+intill omedelbart, bra för att bekräfta att telemetri över huvud taget
+kommer in) eller **Logs** → en enkel KQL-fråga som `traces | order by
+timestamp desc | take 20` för att se Serilogs egna loggrader (inte bara
+ASP.NET Core:s inbyggda request-telemetri, som skulle synas där även utan
+Serilog-sinket). En rad som matchar en riktig `_logger.LogInformation`/
+`LogWarning`-anrop i koden (t.ex. "User {UserId} logged in" efter en
+inloggning mot den driftsatta appen) är den faktiska bekräftelsen på att
+hela kedjan — Serilog → sinket → Application Insights-resursen — fungerar,
+samma "ett konkret, verkligt anrop är mer övertygande än att bara läsa
+koden"-princip som `/health` var för Del 8 och en lyckad `stats`-cache-träff
+var för Del 13.
+
 ## Del 15: Audit Log — inget nytt avsnitt behövs här
 
 Del 15 (systemomfattande `AuditLog`) är klar och bekräftad fungerande
@@ -801,4 +880,8 @@ Redis-instans (avsnitt 10 ovan). Fas 3s enda kvarvarande punkt är
 fortsatt Del 20 (generalisera Key Vault-uppsättningen, byta ut den
 återanvända SQL-admin-inloggningen mot en snävare — nu med
 Redis-anslutningssträngen som ytterligare en hemlighet den
-generaliseringen får ta hand om).
+generaliseringen får ta hand om). Fas 5 har nu sin första egna öppna
+molnpunkt också: Del 14 (avsnitt 11 ovan) är klar och verifierad lokalt,
+men väntar fortfarande på att en riktig Application Insights-resurs faktiskt
+provisioneras — samma "kod klar, Azure-resurs kvar"-mönster som Del 12 och
+Del 13 redan har.

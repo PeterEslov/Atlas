@@ -662,6 +662,112 @@ snapshot behind as its only remaining trace, and a Manager token correctly
 receiving `403` from `GET /api/audit-logs` rather than `200` — all seven
 passing against the real API and a real Azure SQL database, not a mock.
 
+**Del 14 — Serilog and Application Insights, structured logging.** The
+roadmap's Fas 5 line for this Del said "Application Insights, structured
+logging" as if it were one thing to add from scratch, but the codebase
+already had extensive structured logging: `TicketService`, `UserService`,
+`OrganizationService`, `ProjectService` and `AuthService` all had `ILogger<T>`
+call sites (`_logger.LogInformation("... {Property} ...", ...)`) since the
+Dels that introduced them. `ILogger<T>` is an abstraction ASP.NET Core's
+default logging providers implement — and Serilog implements too, as a
+drop-in replacement. Del 14's actual job was almost entirely swapping the
+logging *engine*, not writing new log call sites at every layer; the one
+genuine gap it closed is described below. Scoped to `Atlas.Api` only for
+this Del, not `Atlas.Worker` — see "Current known simplifications" below.
+
+`Program.cs` uses Serilog's documented two-stage initialization pattern.
+A minimal "bootstrap" logger — `Log.Logger = new
+LoggerConfiguration().WriteTo.Console().CreateBootstrapLogger();` — exists
+before `WebApplication.CreateBuilder(args)` even runs, so a startup failure
+before configuration or DI exist yet (a malformed connection string, a
+missing required setting) still gets logged instead of vanishing. Once the
+builder exists, `builder.Host.UseSerilog((context, _, loggerConfiguration)
+=> ...)` builds the real logger — `ReadFrom.Configuration(...)` (from the new
+`Serilog.Settings.Configuration` package; NOT bundled into `Serilog.AspNetCore`
+itself, unlike the console sink — confirmed by checking its actual dependency
+list rather than assuming), enrichers, the console sink, and a conditional
+second sink to Application Insights, wired up only when
+`ApplicationInsights:ConnectionString` is actually a non-empty value —
+`appsettings.json` ships that key empty, and `appsettings.Development.json`
+omits it entirely, so a plain local `dotnet run` never tries to send
+telemetry anywhere. Everything — the whole `try`/`catch`/`finally` around
+`app.Run()` — is wrapped so that any unhandled startup or runtime exception
+is captured by `Log.Fatal(ex, "Atlas.Api terminated unexpectedly")` before
+the process exits, and `await Log.CloseAndFlushAsync()` in the `finally`
+block makes sure buffered log events (Application Insights' sink batches
+before sending) aren't lost on shutdown.
+
+The `catch` clause is `catch (Exception ex) when (ex is not
+HostAbortedException)` — deliberately excluding one specific exception type.
+`dotnet ef migrations add`/`dotnet ef database update` build just enough of
+the host to discover the `DbContext` and then deliberately throw
+`Microsoft.Extensions.Hosting.HostAbortedException` as their own mechanism
+for stopping short of `app.Run()`. Without the `when` guard, every single
+`dotnet ef` command run against this project would log a spurious "Fatal"
+line for something that isn't a failure at all.
+
+`UseSerilogRequestLogging()`, added to the middleware pipeline right after
+`app.Build()`, replaces the framework's own multi-line-per-request logging
+with one structured line per HTTP request ("HTTP {Method} {Path} responded
+{StatusCode} in {Elapsed} ms") — the kind of thing a real dashboard or log
+query actually wants to filter and aggregate on, rather than several lines
+of noise per request.
+
+The one real gap Del 14 closed, rather than just re-plumbing: before this
+Del, a failed login (`AuthService.LoginAsync`) produced no log line
+whatsoever — the `AuthenticationException` it throws is caught by
+`ExceptionHandlingMiddleware`'s dedicated 401 branch, which (unlike its
+catch-all `Exception` branch) never logged anything either. Two
+`_logger.LogWarning` calls were added, one per failure branch (invalid
+credentials; a deactivated account), each naming the account being attempted
+against — deliberately more specific than the identical, deliberately vague
+401 message the caller ever sees (never revealing *why* a login failed is
+what prevents user-enumeration; a log line that never leaves this process
+has no such constraint, and repeated failed attempts against the same
+`{Email}` becoming a queryable signal once this reaches Application Insights
+was worth the two extra lines).
+
+Adding the Application Insights sink surfaced a real NuGet dependency
+conflict, not a cosmetic warning: `Serilog.Sinks.ApplicationInsights 5.0.1`
+declares `Microsoft.ApplicationInsights (>= 2.23.0 && < 3.0.0)`, and an
+initial pin at `Microsoft.ApplicationInsights 3.1.2` built fine locally but
+produced a genuine `NU1608` warning ("resolved outside of dependency
+constraint") — NuGet correctly flagging that the sink has never been tested
+against the 3.x line and its behavior there is unverified. The fix was
+pinning to `2.23.0`, the newest version that actually satisfies the sink's
+own declared range, not silencing the warning.
+
+Getting `scripts/test-del14-logging.sh` itself to work correctly along the
+way surfaced a genuine ASP.NET Core hosting lesson, unrelated to Del 14's
+actual application code: launching `Atlas.Api`'s compiled DLL directly
+(rather than `dotnet run`, for reliable PID-based process control in the
+script) with no `--contentRoot` argument resolves `ContentRootPath` to
+`Directory.GetCurrentDirectory()` — the process's working directory — not
+the DLL's own folder, so the app couldn't find its `appsettings*.json` files
+when launched from the repo root. A *relative* `--contentRoot` value doesn't
+fix this either — HostBuilder resolves it against `AppContext.BaseDirectory`
+(the DLL's own folder, `bin/Debug/net10.0`), producing a nonsensical
+double-nested path. The fix needed an *absolute* `--contentRoot` pointing at
+`src/Atlas.Api`, which on Windows via Git Bash meant using `pwd -W` (the
+Windows-style path MSYS's own `pwd` doesn't give a native, non-MSYS process
+like `dotnet.exe`) rather than assuming the environment name
+(`--environment`/`ASPNETCORE_ENVIRONMENT`) was ever the actual blocker, as it
+first appeared to be.
+
+**Confirmed working end-to-end locally on 2026-09-12**, via
+`scripts/test-del14-logging.sh` against a running `Atlas.Api`: the app
+starts and serves `/health` with a fake `ApplicationInsights:ConnectionString`
+set (proving the sink wires up without crashing the app, though not that
+telemetry actually reaches a real Azure resource — that needs a real
+Application Insights instance, see `docs/AZURE_DEPLOYMENT.md`); console
+output uses Serilog's own `[HH:mm:ss LVL]` format rather than the old
+`info:`-style default; `UseSerilogRequestLogging` wrote a line for a GET
+request with the correct status code; a failed login with the wrong
+password produced `401` plus a matching `WRN` line; a failed login against a
+deactivated account produced `401` plus its own, differently-worded `WRN`
+line; and a successful login still produced the pre-existing `_logger`
+line, now flowing through Serilog unchanged.
+
 ## Current known simplifications (by design)
 
 - Azure SQL (Del 9) reuses Peter's existing SQL login for the moment — the
@@ -725,6 +831,20 @@ passing against the real API and a real Azure SQL database, not a mock.
   normal application use triggers today. `DownloadAttachmentAsync` logs a
   warning and returns 404 if it ever encounters a DB row with no matching
   blob, rather than throwing — there is genuinely nothing to download.
+- Del 14's Serilog/Application Insights logging is scoped to `Atlas.Api`
+  only — `Atlas.Worker` still uses the default .NET Generic Host logging
+  providers, unchanged. Extending the same Serilog setup to `Atlas.Worker`
+  is deliberately deferred rather than done alongside Del 14, the same
+  "get the App first, extend to the Worker as its own step" order
+  `AddPersistence`/`AddBlobStorage`/`AddAuthInfrastructure` already
+  established (see Del 11 above) for infrastructure wiring generally.
+- `ApplicationInsights:ConnectionString` is empty in `appsettings.json` and
+  absent entirely from `appsettings.Development.json` by design — no
+  Application Insights resource has been provisioned in Azure yet (see
+  `docs/AZURE_DEPLOYMENT.md`), so local development never attempts to send
+  telemetry anywhere. `scripts/test-del14-logging.sh` only ever passes a
+  fake connection string to prove the sink wires up without crashing the
+  app, not that telemetry reaches a real resource.
 - The JWT signing key and the Azure SQL connection string both live in
   `appsettings.Development.json` / user-secrets locally, and as Azure Key
   Vault secrets once deployed (`Jwt--SigningKey` since Del 8,

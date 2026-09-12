@@ -134,24 +134,30 @@ fi
 echo "TEST 1: Startar Atlas.Api med en (påhittad) ApplicationInsights:ConnectionString satt ..."
 FAKE_AI_CONNECTION_STRING="InstrumentationKey=00000000-0000-0000-0000-000000000000;IngestionEndpoint=https://swedencentral-1.in.applicationinsights.azure.com/"
 : > "$LOG_FILE"
-# Ingen --contentRoot behövs (en tidigare version av det här skriptet
-# skickade in en relativ sådan, "src/Atlas.Api" — och kraschade:
-# HostBuilder löser upp en RELATIV --contentRoot mot AppContext.BaseDirectory
-# (DLL:ens egen mapp, bin/Debug/net10.0), inte mot skriptets arbetskatalog,
-# vilket gav den absurda C:\...\bin\Debug\net10.0\src\Atlas.Api\ och en
-# DirectoryNotFoundException direkt i WebApplication.CreateBuilder). Utan
-# argumentet alls faller ContentRootPath tillbaka på just
-# AppContext.BaseDirectory — och där ligger redan appsettings.json/
-# appsettings.Development.json, kopierade dit av bygget precis som de
-# hamnar där när `dotnet run` startar samma DLL. ASPNETCORE_ENVIRONMENT sätts
-# uttryckligen till Development eftersom vi kringgår launchSettings.json (det
-# är den filen, inte något dotnet gör automatiskt, som normalt sätter den
-# miljövariabeln åt `dotnet run`) — utan den hade appsettings.Development.json
-# aldrig lästs in, och appen hade startat mot den tomma
-# ConnectionStrings:AtlasDb i appsettings.json i stället för din LocalDB.
-ASPNETCORE_ENVIRONMENT=Development \
-  ApplicationInsights__ConnectionString="$FAKE_AI_CONNECTION_STRING" \
-  dotnet "$API_DLL" --urls "$BASE_URL" >>"$LOG_FILE" 2>&1 &
+# ContentRootPath, med INGET --contentRoot alls, faller tillbaka på processens
+# arbetskatalog (Directory.GetCurrentDirectory()) — inte på DLL:ens egen mapp,
+# vilket de två föregående felsökningsrundorna av det här skriptet antog.
+# Peters egen diagnostik (körde DLL:en direkt, i förgrunden, från repo-roten)
+# bevisade det: appsettings.Development.json fanns med rätt innehåll i
+# bin/Debug/net10.0/, ändå kunde appen inte hitta den — eftersom den letade i
+# repo-roten (arbetskatalogen), inte i src/Atlas.Api/ där filen faktiskt
+# kopierats till. Miljönamnet (Development/Production) spelade aldrig någon
+# roll i de två tidigare försöken: fel KATALOG genomsöktes helt oavsett, så
+# ingen fil hittades alls, med samma "was not found"-fel i båda fallen.
+#
+# Fixen är en ABSOLUT --contentRoot, inte ingen alls och inte en relativ (en
+# relativ --contentRoot-sträng löses istället upp mot AppContext.BaseDirectory,
+# DLL:ens egen mapp — det var den första felsökningsrundans separata, redan
+# fixade bugg). pwd -W ger sökvägen i Windows-form (C:/Users/...) i stället
+# för git-bashs interna /c/Users/...-form, som .NET (ett vanligt Windows-
+# program, inte ett MSYS-program) inte kan lita på att tolka rätt.
+WIN_REPO_ROOT="$(pwd -W 2>/dev/null || pwd)"
+dotnet "$API_DLL" \
+  --urls "$BASE_URL" \
+  --contentRoot "$WIN_REPO_ROOT/$API_PROJECT" \
+  --environment Development \
+  --ApplicationInsights:ConnectionString="$FAKE_AI_CONNECTION_STRING" \
+  >>"$LOG_FILE" 2>&1 &
 API_PID=$!
 
 waited=0
@@ -207,10 +213,10 @@ line
 echo "TEST 2 + 3: Serilogs konsolformat och UseSerilogRequestLogging"
 authed_request_expect_2xx GET "$BASE_URL/api/users/$TEST_USER_ID"
 
-if grep -q '\[INF\]' "$LOG_FILE"; then
-  pass "konsolutskriften använder Serilogs eget format ([INF]), inte det gamla 'info:'-formatet."
+if grep -qE '\[[0-9:]+ INF\]' "$LOG_FILE"; then
+  pass "konsolutskriften använder Serilogs eget format ([HH:mm:ss INF]), inte det gamla 'info:'-formatet."
 else
-  fail "hittade ingen [INF]-rad — loggar Serilog verkligen till konsolen?"
+  fail "hittade ingen [.. INF]-rad — loggar Serilog verkligen till konsolen?"
 fi
 
 if grep -qE 'GET /api/users/[0-9a-fA-F-]+ responded 200' "$LOG_FILE"; then
@@ -227,7 +233,7 @@ LOGIN_STATUS=$(http_status_for -X POST "$BASE_URL/api/auth/login" \
   -d "{\"email\":\"$TEST_EMAIL\",\"password\":\"fel-losenord-helt-klart\"}")
 info "POST /api/auth/login (fel lösenord) svarade: $LOGIN_STATUS"
 
-if [ "$LOGIN_STATUS" = "401" ] && grep -qE "\[WRN\].*Failed login attempt for $TEST_EMAIL: invalid credentials" "$LOG_FILE"; then
+if [ "$LOGIN_STATUS" = "401" ] && grep -qE "\[[0-9:]+ WRN\].*Failed login attempt for $TEST_EMAIL: invalid credentials" "$LOG_FILE"; then
   pass "401 mot klienten, och en tydlig WRN-rad i konsolen som identifierar vilket konto — osynligt före Del 14."
 else
   fail "förväntade 401 + en matchande WRN-rad, fick status=$LOGIN_STATUS."
@@ -243,7 +249,7 @@ LOGIN_STATUS=$(http_status_for -X POST "$BASE_URL/api/auth/login" \
   -d "{\"email\":\"$TEST_EMAIL\",\"password\":\"$TEST_PASSWORD\"}")
 info "POST /api/auth/login (deaktiverat konto, rätt lösenord) svarade: $LOGIN_STATUS"
 
-if [ "$LOGIN_STATUS" = "401" ] && grep -qE "\[WRN\].*Failed login attempt for $TEST_EMAIL: account $TEST_USER_ID is deactivated" "$LOG_FILE"; then
+if [ "$LOGIN_STATUS" = "401" ] && grep -qE "\[[0-9:]+ WRN\].*Failed login attempt for $TEST_EMAIL: account $TEST_USER_ID is deactivated" "$LOG_FILE"; then
   pass "401 mot klienten, och en WRN-rad som skiljer det här fallet (deaktiverat) från fel lösenord."
 else
   fail "förväntade 401 + en matchande WRN-rad, fick status=$LOGIN_STATUS."
@@ -259,7 +265,7 @@ LOGIN_RESPONSE=$(curl -s -X POST "$BASE_URL/api/auth/login" \
   -d "{\"email\":\"$TEST_EMAIL\",\"password\":\"$TEST_PASSWORD\"}")
 LOGIN_TOKEN=$(json_field "$LOGIN_RESPONSE" "token")
 
-if [ -n "$LOGIN_TOKEN" ] && grep -qE "\[INF\].*User $TEST_USER_ID logged in" "$LOG_FILE"; then
+if [ -n "$LOGIN_TOKEN" ] && grep -qE "\[[0-9:]+ INF\].*User $TEST_USER_ID logged in" "$LOG_FILE"; then
   pass "inloggningen lyckades och samma AuthService.LoginAsync-rad som fanns före Del 14 syns nu som en Serilog [INF]-rad."
 else
   fail "inloggningen misslyckades, eller så hittades ingen matchande [INF]-rad."
