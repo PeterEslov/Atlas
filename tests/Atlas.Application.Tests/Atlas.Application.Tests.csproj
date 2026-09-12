@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>Atlas.Application.Tests</RootNamespace>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <!--
+    Del 16: unit tests for the Application layer — TicketService, AuthService,
+    UserService, OrganizationService, ProjectService, TeamService. Only a
+    ProjectReference to Atlas.Application itself, mirroring Atlas.Domain.Tests'
+    shape one layer up: every dependency these services actually talk to
+    (ITicketRepository, IUnitOfWork, IBlobStorageService, ...) is an interface
+    defined in Atlas.Application/Common/Interfaces, mocked here with Moq rather
+    than requiring a real database, Azurite, Redis or Service Bus namespace —
+    that's what Atlas.Api.IntegrationTests is for instead. A unit test here
+    that needed any of those running locally to pass would be testing the
+    wrong thing at the wrong layer.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Atlas.Application\Atlas.Application.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="coverlet.collector" Version="6.0.2">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <!--
+      Moq mocks every repository/service interface below (ITicketRepository,
+      IUserRepository, IBlobStorageService, ITicketEventPublisher,
+      ITicketStatsCache, IAuditLogRepository, IPasswordHasher,
+      IJwtTokenGenerator, IUnitOfWork) — the standard, most widely recognized
+      .NET mocking library. It had a licensing/telemetry controversy in 2023
+      (the "SponsorLink" incident) that was reverted within days; nothing
+      about how the library actually works today is affected by it.
+    -->
+    <PackageReference Include="Moq" Version="4.20.72" />
+  </ItemGroup>
+
+</Project>

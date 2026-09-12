@@ -1,0 +1,73 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>Atlas.Api.IntegrationTests</RootNamespace>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <!--
+    Del 16, second half. Atlas.Application.Tests (the unit-test project sitting
+    next to this one) mocks every repository/service dependency and never
+    touches a real database, Azurite, Redis, or Service Bus — it proves
+    TicketService/AuthService/etc. orchestrate correctly in isolation. This
+    project proves the opposite thing: that a real HTTP request, through real
+    JWT authentication, real [Authorize(Policy=...)] enforcement, real routing,
+    and a real LocalDB database (via WebApplicationFactory<Program> — see
+    Program.cs's `public partial class Program {}` marker, added ahead of time
+    during Del 14 for exactly this), actually produces the right status code
+    and JSON shape. Two things can ONLY be tested here, not in
+    Atlas.Application.Tests: the self-role-change/self-deactivate guard in
+    UsersController (it reads ICurrentUserService, which only means something
+    with a real authenticated HttpContext behind it), and EF Core's navigation-
+    property fixup (e.g. TicketTag.Tag resolving to a real tag name) — see the
+    doc comment on TicketServiceTests.AddTagAsync_... in Atlas.Application.Tests
+    for the full reasoning on why a mocked unit test can't observe that.
+
+    A direct ProjectReference to Atlas.Api itself (not just Atlas.Application)
+    is required for WebApplicationFactory<Program> to resolve ContentRootPath
+    correctly out of the box — Microsoft.AspNetCore.Mvc.Testing's MSBuild
+    targets emit a [assembly: WebApplicationFactoryContentRootAttribute]
+    pointing at Atlas.Api's own output only when there's a direct reference to
+    it, which sidesteps the manual - ger ett errror om det är ihop-contentRoot / pwd -W debugging saga this
+    project already went through once for a *different* problem during Del 14
+    (see docs/ARCHITECTURE.md) — no reason to invite a repeat of that here.
+
+    Prerequisites to actually run this project locally (all already required
+    by `dotnet run`ning Atlas.Api itself in Development, per README.md "Kom
+    igång" — nothing new except the dedicated AtlasDb_Test database, which
+    ApiFactory creates and migrates itself):
+      - LocalDB (AtlasDb_Test — separate from the AtlasDb a `dotnet run`
+        session might have open in SSMS/Azure Data Studio at the same time)
+      - Azurite running (BlobStorage:ConnectionString = UseDevelopmentStorage=true)
+      - A local Redis container (`docker run -p 6379:6379 redis`)
+      - `az login` (Service Bus's DefaultAzureCredential chain — see
+        DependencyInjection.AddMessaging's doc comment; ExcludeManagedIdentityCredential
+        is already set to true in appsettings.Testing.json, same as Development)
+    These are NOT started automatically by `dotnet test` — see the "Category=Integration"
+    trait every test class in this project carries, and azure-pipelines.yml's
+    `- -filter "Category!=Integration"`, for why CI's ubuntu-latest agent (which
+    has none of the above) never attempts to run them.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Atlas.Api\Atlas.Api.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="coverlet.collector" Version="6.0.2">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.0" />
+  </ItemGroup>
+
+</Project>

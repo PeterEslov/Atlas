@@ -22,7 +22,7 @@ pr:
 
 variables:
   buildConfiguration: 'Release'
-  azureServiceConnection: 'project-atlas-connectionname'   # set to your actual service connection name (docs/AZURE_DEPLOYMENT.md section 5)
+  azureServiceConnection: 'sc-projectatlas-dev-sc'   # set to your actual service connection name (docs/AZURE_DEPLOYMENT.md section 5)
   webAppName: 'app-projectatlas-dev-sc'              # set to your actual Web App name (docs/AZURE_DEPLOYMENT.md section 1)
 
 stages:
@@ -45,8 +45,20 @@ stages:
           - script: dotnet build --configuration $(buildConfiguration) --no-restore
             displayName: 'dotnet build'
 
-          - script: dotnet test --configuration $(buildConfiguration) --no-build
-            displayName: 'dotnet test'
+          # Del 16: excludes Atlas.Api.IntegrationTests, every one of which
+          # carries [Trait("Category", "Integration")] (see that project's
+          # own csproj doc comment). Those tests need a real LocalDB database,
+          # Azurite, a local Redis container and `az login` — none of which
+          # exist on this ubuntu-latest agent, unlike Atlas.Domain.Tests and
+          # Atlas.Application.Tests, which mock every external dependency and
+          # need nothing beyond the .NET SDK just installed above. Integration
+          # tests stay a local-only, opt-in tier — run by hand with
+          # `dotnet test --filter "Category=Integration"` once those
+          # prerequisites are running — the same "local-only, not part of CI"
+          # status this project's bash smoke-test scripts (scripts/test-*.sh)
+          # already have, for the same reason.
+          - script: dotnet test --configuration $(buildConfiguration) --no-build --filter "Category!=Integration"
+            displayName: 'dotnet test (unit tests only — see comment above for why integration tests are excluded)'
 
           - script: >-
               dotnet publish src/Atlas.Api/Atlas.Api.csproj

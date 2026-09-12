@@ -768,6 +768,128 @@ deactivated account produced `401` plus its own, differently-worded `WRN`
 line; and a successful login still produced the pre-existing `_logger`
 line, now flowing through Serilog unchanged.
 
+**Del 16 — a broader test suite: Application-layer unit tests plus real
+HTTP integration tests.** Two new test projects, sitting next to
+`Atlas.Domain.Tests` but deliberately different in what each one proves.
+
+`Atlas.Application.Tests` mocks every Application-layer dependency
+(`ITicketRepository`, `IUnitOfWork`, `IBlobStorageService`,
+`ITicketEventPublisher`, `ITicketStatsCache`, `IAuditLogRepository`,
+`IPasswordHasher`, `IJwtTokenGenerator`, ...) with **Moq**, and asserts that
+`AuthService`, `UserService`, `OrganizationService`, `ProjectService`,
+`TeamService` and `TicketService` orchestrate correctly in isolation — no
+database, Azurite, Redis or Service Bus namespace needed. 39 tests turn
+several previously-only-documented decisions into regression tests: the
+Redis cache-invalidation matrix from Del 13 (status/priority/create/delete
+invalidate; assignment and comments deliberately don't), the audit-scope
+decision from Del 15 (`Project`/`Team` membership churn never writes an
+audit row; Create/Archive/Unarchive/RoleChanged/Deactivated do), and the
+orphaned-blob compensation path in `TicketService.AddAttachmentAsync` (if
+the database write fails *after* the blob upload succeeds, the blob is
+deleted before the exception is rethrown — verified with Moq's `Callback`
+to capture the dynamically-generated blob name the mock never actually
+receives ahead of time).
+
+Two design mistakes were caught while writing these tests, before either
+one reached disk, simply by re-reading the actual implementation instead of
+trusting this document's own prose:
+
+- `docs/ARCHITECTURE.md`'s Del 12 section describes Service Bus publish
+  failures as "swallowed", which is true — but only inside
+  `ServiceBusTicketEventPublisher` (`Atlas.Infrastructure`), not inside
+  `TicketService.AssignAsync` itself, which has no `try`/`catch` around the
+  publish call at all. A `TicketService`-level unit test with a throwing
+  publisher mock correctly observes the exception *propagating*, the
+  opposite of what the Del 12 prose might suggest at the wrong layer — see
+  `TicketServiceTests`'s class doc comment for the corrected scope
+  boundary.
+- `TicketTag.Tag`'s navigation property (used by `ToDetailDto`'s
+  `t.Tag?.Name ?? t.TagId.ToString()` to resolve a tag's display name) is
+  only populated by EF Core's change-tracker *fixup* when a real
+  `DbContext` is tracking both the `Ticket` and the `Tag` it's tagged
+  with — fixup that a fully-mocked unit test, with no `DbContext` at all,
+  can never trigger. `TicketServiceTests.AddTagAsync_...` was corrected to
+  assert on the `TagId` alone; proving the *name* actually resolves is left
+  to the integration test below, which is the only kind of test that can
+  prove it.
+
+`Atlas.Api.IntegrationTests` is the opposite kind of test: real HTTP calls,
+through `Microsoft.AspNetCore.Mvc.Testing`'s
+`WebApplicationFactory<Program>`, against a real ASP.NET Core host — real
+JWT bearer authentication, real `[Authorize(Policy = ...)]` enforcement,
+real routing — and a real database, a dedicated `AtlasDb_Test` LocalDB
+instance kept separate from the `AtlasDb` a `dotnet run` session might have
+open. `ApiFactory` (`Infrastructure/ApiFactory.cs`) is an `IAsyncLifetime`
+xUnit collection fixture shared across every test class in the project: its
+`InitializeAsync` runs `EnsureDeletedAsync()` + `MigrateAsync()` exactly
+*once* per `dotnet test` invocation (not once per test class or test case)
+and seeds one `Organization` row every test registers users against —
+cheap only because every test generates its own unique data (a
+Guid-suffixed email, a Guid-suffixed ticket title), the same discipline
+this project's bash smoke-test scripts already use against Peter's real
+dev database. `Program.cs`'s own `if (app.Environment.IsDevelopment())`
+auto-migrate block does **not** run for `ApiFactory`'s `"Testing"`
+environment (`IsDevelopment()` checks the environment name literally) —
+`ApiFactory` is entirely responsible for its own schema setup, the same way
+a human running `dotnet ef database update` by hand would be.
+
+A direct `ProjectReference` from `Atlas.Api.IntegrationTests` to
+`Atlas.Api.csproj` itself — not just `Atlas.Application` — is required for
+`WebApplicationFactory<Program>` to resolve `ContentRootPath` correctly out
+of the box: `Microsoft.AspNetCore.Mvc.Testing`'s MSBuild targets only emit
+the `[assembly: WebApplicationFactoryContentRootAttribute]` that makes this
+work automatically when there's a direct reference to the web project,
+sidestepping a repeat of Del 14's `--contentRoot`/`pwd -W` debugging saga
+(described above) for what would otherwise be the exact same underlying
+problem. `public partial class Program {}`, appended to the bottom of
+`Program.cs`, was added ahead of time during Del 14 for exactly this Del.
+
+19 integration tests cover the two things this project's mocked unit tests
+structurally cannot: `UsersController`'s self-role-change/self-deactivate
+guard (it reads `ICurrentUserService.UserId` off a real authenticated
+`HttpContext`, which only means something with a real HTTP pipeline behind
+it — Admin included, since the guard checks the caller's own token, not
+their role) and the `TicketTag.Tag` name-resolution fixup flagged above
+(`AddTag_ThenGetById_ReturnsTheResolvedTagName` adds a tag through the real
+API, fetches the ticket back, and asserts the actual tag name comes back —
+something the mocked `TicketServiceTests` version of this same scenario
+explicitly could not assert). The rest exercise permission-policy
+enforcement end to end (a `Customer` token getting `403` from
+`POST /api/tickets/{id}/assign`, a `Manager` token getting `403` from
+`POST /api/organizations` since `Organization.Manage` is Admin-only, ...)
+and a handful of full create → mutate → read round trips against the real
+database.
+
+**A genuine, if minor, finding, not a false positive**: one integration
+test (`Register_WithAnEmailThatAlreadyExists_Returns401NotTheDocumented400`)
+caught a real inconsistency between `AuthController.Register`'s
+`[ProducesResponseType(StatusCodes.Status400BadRequest)]` Swagger metadata
+and its actual runtime behavior. `AuthService.RegisterAsync` throws
+`AuthenticationException` — the same exception type used for "wrong
+password" at login — for a duplicate email, and
+`ExceptionHandlingMiddleware` maps every `AuthenticationException` to
+**401**, never 400. No mocked service-level unit test could ever catch this
+kind of gap: `AuthServiceTests` correctly asserts
+`ThrowsAsync<AuthenticationException>`, which says nothing about what
+status code the middleware turns that into over HTTP. Left as a documented
+inconsistency for now rather than "fixed" in either direction — see
+README.md's Authentication & authorization section.
+
+Integration tests are tagged `[Trait("Category", "Integration")]` on every
+test class and excluded from CI's `dotnet test` step in
+`azure-pipelines.yml` via `--filter "Category!=Integration"` — the
+`ubuntu-latest` build agent has none of LocalDB, Azurite, a local Redis
+container, or `az login`, the same reason this project's bash smoke-test
+scripts (`scripts/test-del1*.sh`) have always been a local-only, opt-in
+tier rather than part of CI.
+
+**Confirmed working end-to-end locally on 2026-09-12**: `dotnet test
+--filter "Category!=Integration"` — 93 tests (`Atlas.Domain.Tests` +
+`Atlas.Application.Tests`) — all passing; `dotnet test
+tests/Atlas.Api.IntegrationTests --filter "Category=Integration"` — all 19
+integration tests passing against a real `AtlasDb_Test` LocalDB database,
+Azurite, a local Redis container, and `az login`.
+
 ## Current known simplifications (by design)
 
 - Azure SQL (Del 9) reuses Peter's existing SQL login for the moment — the
@@ -856,3 +978,20 @@ line, now flowing through Serilog unchanged.
   a pre-existing vault and onto one provisioned as part of the project's own
   IaC, and replacing the reused server-admin SQL login with a narrower one
   scoped to just `AtlasDb` — rather than introducing Key Vault from scratch.
+- Del 16's test suite is scoped to `Atlas.Api` only, the same scoping
+  decision Del 14 made — `Atlas.Worker` has no unit or integration test
+  project of its own yet. Its two consumers
+  (`OverdueTicketNotificationService`, `TicketAssignedConsumer`) are
+  currently only exercised indirectly, by hand, via
+  `scripts/test-del11-worker.sh`/`scripts/test-del12-servicebus.sh` — a real
+  gap next to `Atlas.Api`'s now much better-covered services, and a
+  reasonable candidate to close alongside whatever Del eventually gives
+  `Atlas.Worker` its own Serilog setup.
+- The `AuthController.Register` 401-vs-documented-400 inconsistency Del 16
+  found (see that Del's section above) is left as a documented
+  inconsistency rather than fixed in either direction — fixing it means
+  picking a side (loosen `ExceptionHandlingMiddleware`'s mapping to
+  distinguish "bad credentials" from "this business rule was violated", or
+  just correct the Swagger attribute to match what the API already does)
+  and this project would rather make that call deliberately, later, than as
+  a rushed one-line change while writing an unrelated test.

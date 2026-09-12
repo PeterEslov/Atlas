@@ -1,6 +1,7 @@
+
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio Version 18
-VisualStudioVersion = 18.9.12120.119
+# Visual Studio Version 17
+VisualStudioVersion = 17.11.35222.181
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Atlas.Domain", "src\Atlas.Domain\Atlas.Domain.csproj", "{EA4A7DCC-B84F-4524-958A-C018DC9C796D}"
 EndProject
@@ -12,13 +13,11 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Atlas.Api", "src\Atlas.Api\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Atlas.Domain.Tests", "tests\Atlas.Domain.Tests\Atlas.Domain.Tests.csproj", "{2D379001-639A-4BAA-B533-9C5D68614168}"
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{96CB0D47-ECA6-44B3-93BD-64F7BFE681DB}"
-	ProjectSection(SolutionItems) = preProject
-		docs\ARCHITECTURE.md = docs\ARCHITECTURE.md
-		docs\AZURE_DEPLOYMENT.md = docs\AZURE_DEPLOYMENT.md
-	EndProjectSection
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Atlas.Worker", "src\Atlas.Worker\Atlas.Worker.csproj", "{B7DFFDD9-45DB-4BE3-A844-78FE339A61F0}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Atlas.Worker", "src\Atlas.Worker\Atlas.Worker.csproj", "{2AA77097-09A5-12FB-68C3-7F37258BC255}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Atlas.Application.Tests", "tests\Atlas.Application.Tests\Atlas.Application.Tests.csproj", "{1459C23A-E817-4E1F-9D3C-5B7AF19D6CD6}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Atlas.Api.IntegrationTests", "tests\Atlas.Api.IntegrationTests\Atlas.Api.IntegrationTests.csproj", "{8CE802C3-BC61-4ACA-A043-E54014DF6309}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -46,10 +45,18 @@ Global
 		{2D379001-639A-4BAA-B533-9C5D68614168}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{2D379001-639A-4BAA-B533-9C5D68614168}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{2D379001-639A-4BAA-B533-9C5D68614168}.Release|Any CPU.Build.0 = Release|Any CPU
-		{2AA77097-09A5-12FB-68C3-7F37258BC255}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{2AA77097-09A5-12FB-68C3-7F37258BC255}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{2AA77097-09A5-12FB-68C3-7F37258BC255}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{2AA77097-09A5-12FB-68C3-7F37258BC255}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B7DFFDD9-45DB-4BE3-A844-78FE339A61F0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B7DFFDD9-45DB-4BE3-A844-78FE339A61F0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B7DFFDD9-45DB-4BE3-A844-78FE339A61F0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B7DFFDD9-45DB-4BE3-A844-78FE339A61F0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{1459C23A-E817-4E1F-9D3C-5B7AF19D6CD6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1459C23A-E817-4E1F-9D3C-5B7AF19D6CD6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1459C23A-E817-4E1F-9D3C-5B7AF19D6CD6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1459C23A-E817-4E1F-9D3C-5B7AF19D6CD6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8CE802C3-BC61-4ACA-A043-E54014DF6309}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8CE802C3-BC61-4ACA-A043-E54014DF6309}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8CE802C3-BC61-4ACA-A043-E54014DF6309}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8CE802C3-BC61-4ACA-A043-E54014DF6309}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

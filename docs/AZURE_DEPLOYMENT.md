@@ -885,3 +885,27 @@ molnpunkt också: Del 14 (avsnitt 11 ovan) är klar och verifierad lokalt,
 men väntar fortfarande på att en riktig Application Insights-resurs faktiskt
 provisioneras — samma "kod klar, Azure-resurs kvar"-mönster som Del 12 och
 Del 13 redan har.
+
+## Del 16: Tester — inget nytt avsnitt behövs här, av ett annat skäl än Del 15
+
+Del 16 (`Atlas.Application.Tests` + `Atlas.Api.IntegrationTests`, se
+`docs/ARCHITECTURE.md`s Del 16-avsnitt) är klar och bekräftad fungerande
+lokalt — 93 enhetstester och 19 integrationstester, alla gröna. Den får
+medvetet **inget eget numrerat avsnitt här heller**, men av ett annat skäl
+än Del 15 ovan: Del 15 rörde en riktig produktionstabell i samma Azure SQL-
+databas allt annat redan använder, så "driftsättningen är redan gjord" var
+den intressanta poängen. Del 16 rör sig aldrig i närheten av Azure
+överhuvudtaget — `Atlas.Api.IntegrationTests` kör mot en egen, lokal
+`AtlasDb_Test`-databas i LocalDB (se `appsettings.Testing.json`), inte mot
+Azure SQL, och testerna själva deployas aldrig till App Service; de körs
+bara av en utvecklare (eller CI, för den icke-integrationsdelen — se
+`azure-pipelines.yml`s `--filter "Category!=Integration"`) före en push. Det
+finns med andra ord ingenting här att provisionera, konfigurera eller
+bevilja en roll för — testsviten är en kvalitetsgrind runt koden, inte en
+ny molnresurs.
+
+Fas 4:s och Fas 5:s öppna molnpunkter är därför exakt desamma som innan Del
+16: *var* `Atlas.Worker` ska köras i Azure, en riktig Azure Cache for
+Redis-instans, och en riktig Application Insights-resurs (avsnitt 9–11
+ovan). Fas 5:s enda kvarvarande *kod*-punkt, i motsats till dess öppna
+*molnpunkt*, är nu bara Del 17 (Docker) — se README.md:s Roadmap.

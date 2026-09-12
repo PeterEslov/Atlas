@@ -112,7 +112,13 @@ Principle, not just a folder convention.
   [Authentication & authorization](#authentication--authorization) below
 - PBKDF2-HMAC-SHA256 password hashing (BCL `System.Security.Cryptography`,
   no external package)
-- xUnit for domain unit tests
+- **xUnit**, across three test projects with three different scopes (Del 16):
+  domain unit tests (`Atlas.Domain.Tests`), Application-layer unit tests with
+  **Moq** mocking every repository/service interface
+  (`Atlas.Application.Tests`), and real end-to-end HTTP tests via
+  **`Microsoft.AspNetCore.Mvc.Testing`**'s `WebApplicationFactory<Program>`
+  against a dedicated LocalDB database (`Atlas.Api.IntegrationTests`) — see
+  [Del 16](#roadmap) below and "[Run the tests](#9-run-the-tests)"
 - Swagger / OpenAPI (ASP.NET Core's built-in generator + Swashbuckle UI)
 - **.NET Generic Host / Worker Service** (`Atlas.Worker`) — a second, separate
   host process for background work, distinct from `Atlas.Api`'s ASP.NET Core
@@ -136,8 +142,9 @@ React frontend. (Key Vault and a CI/CD pipeline are already in place as of
 Del 8, Azure SQL and Blob Storage as of Del 9/10, a background worker as of
 Del 11, Service Bus publish/consume as of Del 12, Redis caching as of
 Del 13, structured logging with an optional Application Insights sink as of
-Del 14, and the audit trail as of Del 15 — see below — all pulled forward
-rather than left for later.)
+Del 14, the audit trail as of Del 15, and a broader test suite (93 unit +
+19 integration tests) as of Del 16 — see below — all pulled forward rather
+than left for later.)
 
 ## Project structure
 
@@ -156,12 +163,27 @@ src/
                            Repositories/AuditLogRepository (Del 15)
   Atlas.Api/               Controllers (Tickets, Auth, Organizations, Users, Projects, Teams,
                            AuditLogs), Program.cs (Del 14: two-stage Serilog
-                           bootstrap + UseSerilogRequestLogging), appsettings
+                           bootstrap + UseSerilogRequestLogging; also exposes
+                           `public partial class Program {}` for Del 16's
+                           WebApplicationFactory<Program>), appsettings,
+                           appsettings.Testing.json (Del 16 — a dedicated
+                           AtlasDb_Test connection string)
   Atlas.Worker/            .NET Generic Host (Del 11) — OverdueTicketWorker (polls every
                            5 minutes) and TicketAssignedConsumer (Del 12, Service Bus)
 tests/
   Atlas.Domain.Tests/       xUnit tests for Ticket's business rules, RolePermissions, User,
                            Organization, Project, Team, AuditLog
+  Atlas.Application.Tests/ Del 16 — xUnit + Moq unit tests for every Application-layer
+                           service (Auth, User, Organization, Project, Team, Ticket),
+                           each repository/cache/publisher mocked; no database or
+                           other external system needed
+  Atlas.Api.IntegrationTests/ Del 16 — xUnit + WebApplicationFactory<Program> tests that
+                           make real HTTP calls through real JWT auth and real
+                           [Authorize(Policy=...)] enforcement against a dedicated
+                           AtlasDb_Test LocalDB database (ApiFactory); tagged
+                           [Trait("Category","Integration")] and excluded from
+                           CI (see azure-pipelines.yml) since it needs LocalDB,
+                           Azurite, Redis and `az login` locally
 sql/
   001_InitialSchema.sql     Hand-written T-SQL reference (see note below)
   002_SeedData.sql          Optional demo data (Northstar IT / ACME AB / one ticket)
@@ -532,9 +554,30 @@ curl "https://localhost:5081/api/audit-logs?entityName=Ticket&action=Deleted&pag
 
 ### 9. Run the tests
 
+Three test projects, two of which need nothing beyond the .NET SDK
+(`Atlas.Domain.Tests`, `Atlas.Application.Tests` — every dependency is
+mocked with Moq), and one — `Atlas.Api.IntegrationTests` (Del 16) — that
+needs everything a normal `dotnet run` needs (LocalDB, Azurite, a local
+Redis container, `az login`), since it boots the real API via
+`WebApplicationFactory<Program>` against its own dedicated `AtlasDb_Test`
+database (`ApiFactory` creates and migrates it fresh on the first test of
+each run — see that class's doc comment).
+
+Run just the fast, dependency-free tests (this is what CI runs — see
+`azure-pipelines.yml`):
+
 ```bash
-dotnet test
+dotnet test --filter "Category!=Integration"
 ```
+
+Run only the integration tests, once the local prerequisites above are
+running:
+
+```bash
+dotnet test tests/Atlas.Api.IntegrationTests --filter "Category=Integration"
+```
+
+Or just `dotnet test` with no filter to run everything.
 
 ## Deploying to Azure (Del 8–9)
 
@@ -604,6 +647,20 @@ endpoints in the API. Every other endpoint requires an
   granting it at Manager level would let a Manager see every organization's
   audit trail, not just their own — see `docs/ARCHITECTURE.md`'s Del 15
   section for the full reasoning.
+- **Known inconsistency, found by Del 16's integration tests**:
+  `POST /api/auth/register` against an email that already exists actually
+  returns **401**, not the 400 `AuthController`'s own
+  `[ProducesResponseType(StatusCodes.Status400BadRequest)]` Swagger
+  attribute documents — `AuthService.RegisterAsync` throws
+  `AuthenticationException` for a duplicate email (the same exception type
+  it uses for "wrong password" at login), and
+  `ExceptionHandlingMiddleware` maps every `AuthenticationException` to 401,
+  never 400. A mocked service-level unit test asserting
+  `ThrowsAsync<AuthenticationException>` (see `AuthServiceTests`) can never
+  catch a mismatch like this — only a real HTTP-level test, checking the
+  actual status code the middleware produces, can. Left as-is for now (the
+  Swagger attribute is what's wrong, not the runtime behavior) — see
+  `docs/ARCHITECTURE.md`'s Del 16 section.
 
 ## Business rules worth reading
 
@@ -665,8 +722,17 @@ database.
       the app already had extensive `ILogger<T>` call sites throughout the
       service layer, so Del 14 was mostly a logging-*engine* swap plus one
       genuine gap it closed (failed login attempts previously produced no
-      log line at all, now a `LogWarning` either way). Still open in this
-      phase: a broader test suite (Del 16) and Docker (Del 17)
+      log line at all, now a `LogWarning` either way). Del 16 (a broader
+      test suite) is also confirmed working end-to-end locally
+      (2026-09-12) — 93 unit tests across `Atlas.Domain.Tests` and the new
+      `Atlas.Application.Tests` (Moq-mocked Application-layer services), plus
+      19 new `Atlas.Api.IntegrationTests` (real HTTP calls through real JWT
+      auth against a dedicated `AtlasDb_Test` LocalDB database via
+      `WebApplicationFactory<Program>`), all passing. Integration tests are
+      tagged `[Trait("Category","Integration")]` and excluded from CI (see
+      `azure-pipelines.yml`) as a local-only, opt-in tier, the same status
+      the bash smoke-test scripts already have. Still open in this phase:
+      Docker (Del 17)
 - [ ] **Phase 6 — DevOps**: Bicep (Infrastructure as Code) — CI/CD itself
       already exists as of Del 8, on Azure Pipelines
 - [ ] **Phase 7 — Polish**: React frontend, dashboard, demo environment
