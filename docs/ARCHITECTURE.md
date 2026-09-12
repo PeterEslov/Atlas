@@ -577,6 +577,91 @@ the Redis container entirely still returned `200 OK` with fresh data instead
 of a `500` (fail-open, proven by actually killing the dependency rather than
 just reading the code).
 
+**Del 15 — AuditLog, a system-wide compliance trail.** `AuditLog` itself is
+not new — it's existed, unused, since Fas 1, with a doc comment already
+drawing the line this Del finally acts on: a security- and
+compliance-relevant record of events *across every entity* (user creation,
+role changes, project archival, ...), deliberately distinct from
+`TicketHistory`, which only ever tracks field-level changes on a single
+ticket. Del 15 is the work of finding every event on that side of the line
+and actually writing to the table.
+
+That turned out to be five call sites across four services, not one:
+`AuthService.RegisterAsync` writes a `Created` entry for the new user
+(`UserService` never sees registration — it only exists once a user already
+does); `UserService` writes `RoleChanged`/`Deactivated`/`Reactivated`;
+`OrganizationService` writes `Created`/`Renamed`/`Deactivated`/`Reactivated`;
+`ProjectService` writes `Created`/`Archived`/`Unarchived`; and
+`TicketService.DeleteAsync` writes a `Deleted` snapshot — the one ticket-level
+event that belongs here rather than in `TicketHistory`, because a hard delete
+removes the ticket `TicketHistory` itself lives on, so `AuditLog` ends up
+holding the *only* surviving trace that the ticket ever existed. Each entry
+stores the actor's `UserId`, the action name, the entity's name and id, and
+an `OldValuesJson`/`NewValuesJson` pair (via a small internal
+`AuditLogSerializer`, `System.Text.Json` with web defaults) — never a
+password or password hash, even for `Created` on a `User`.
+
+Two things Del 15 deliberately does *not* log, both for the same reason Del
+13 gave for `TicketService.AssignAsync` not invalidating the stats cache:
+`Project.AddMemberAsync`/`RemoveMemberAsync` (membership churn is routine,
+not a lifecycle event worth a compliance trail) and any ticket field-level
+change (status, priority, assignment, comments — all already `TicketHistory`'s
+job, and duplicating them into `AuditLog` would just be two records of the
+same fact drifting out of sync over time).
+
+Writing the audit row itself is deliberately **not** fail-open, unlike Del
+12's Service Bus publish or Del 13's Redis cache. Both of those guard an
+external system Atlas doesn't otherwise depend on for correctness — losing a
+notification or a cache hit degrades the feature, not the fact. An audit
+entry is the opposite: it only means something if it is exactly as durable
+as the change it describes. So every audit write happens on the *same*
+scoped `AtlasDbContext` as the change it records — `_auditLogRepository
+.AddAsync(...)` stages the row, then the existing `_unitOfWork
+.SaveChangesAsync(...)` call that was already going to run commits both in
+one transaction. There's no separate audit database, no message queue, and
+no window where the domain change could succeed while the audit entry it
+required silently didn't.
+
+Getting there surfaced a real gap: only `TicketService` had ever needed the
+idea of "the user who did this" — `UserService`, `OrganizationService`, and
+`ProjectService` had no `actorUserId` concept at all, because nothing they
+did before Del 15 needed to record who did it. Closing that meant adding an
+`actorUserId` parameter to `ChangeRoleAsync`/`DeactivateAsync`/
+`ReactivateAsync` (User), `CreateAsync`/`RenameAsync`/`DeactivateAsync`/
+`ReactivateAsync` (Organization), and `CreateAsync`/`ArchiveAsync`/
+`UnarchiveAsync` (Project) — and giving `OrganizationsController`/
+`ProjectsController` the same `ICurrentUserService`-backed `ActorUserId`
+property (falling back to throwing `AuthenticationException` rather than
+ever writing a null actor) that `TicketsController`/`UsersController`
+already had.
+
+Reading the trail back needed its own small piece of EF Core: `AuditLog` has
+deliberately never had a `User` navigation property — it's stayed a minimal,
+write-side-only entity since Fas 1, and adding a navigation purely to satisfy
+a read-side convenience felt like the wrong end to grow it from. So
+`AuditLogRepository.SearchAsync` resolves the acting user's display name at
+query time with an explicit `GroupJoin`/`SelectMany`/`DefaultIfEmpty` against
+`Users` — a manual LEFT JOIN — rather than `Include`, translating to one SQL
+query with no navigation property required. `GET /api/audit-logs` sits behind
+a new `AuditLog.Read` permission, and — unlike `User.Manage`/`Project.Manage`/
+`Organization.Read`, all of which Manager already holds — it stops at Admin
+only. The reason isn't extra caution for its own sake: `AuditLogs` has no
+per-organization filter at all (a Manager's own tenant's audit trail isn't
+separated from anyone else's), so granting it at Manager level would leak
+audit visibility across every organization in the system — a materially
+bigger gap than the existing, already-accepted `Organization.Read` one.
+
+**Confirmed working end-to-end locally on 2026-09-12**, via
+`scripts/test-del15-audit-log.sh` against a running `Atlas.Api`: seven
+checks covering all four services — a self-registered user producing a
+`Created` row, a role change producing `RoleChanged`, deactivate/reactivate
+producing both entries, an organization's create/rename/deactivate cycle
+producing three entries, a project's create/archive/unarchive cycle
+producing three more, a hard-deleted ticket leaving exactly one `Deleted`
+snapshot behind as its only remaining trace, and a Manager token correctly
+receiving `403` from `GET /api/audit-logs` rather than `200` — all seven
+passing against the real API and a real Azure SQL database, not a mock.
+
 ## Current known simplifications (by design)
 
 - Azure SQL (Del 9) reuses Peter's existing SQL login for the moment — the
@@ -596,9 +681,14 @@ just reading the code).
   real deployment would replace with an invite flow or a
   default-to-Customer policy before going anywhere near production.
 - `Notification` has been written to since Del 11 (the overdue-ticket
-  background worker) and now Del 12 (`TicketAssigned` events via Service
-  Bus); `AuditLog` still has nothing writing to it — a good candidate for a
-  future Del.
+  background worker) and Del 12 (`TicketAssigned` events via Service Bus).
+- `AuditLog` (Del 15) has no per-organization filter on
+  `GET /api/audit-logs` — the reason it's Admin-only rather than
+  Manager-level like `User.Manage`/`Project.Manage` (see the Del 15 section
+  above). Adding one would need `AuditLog` to record which organization each
+  entity belonged to at the time, which it doesn't today, since not every
+  audited entity (a `User`, an `Organization` itself) obviously has one. Also
+  still missing: any retention/archival policy — the table only ever grows.
 - `TicketAssignedConsumer` (Del 12) has no protection against Service Bus's
   at-least-once delivery redelivering the same message and creating a
   second `Notification` row — closing that gap would mean keying off each

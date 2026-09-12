@@ -1,3 +1,5 @@
+using Atlas.Application.Common.Exceptions;
+using Atlas.Application.Common.Interfaces;
 using Atlas.Application.Common.Models;
 using Atlas.Application.Organizations.Dtos;
 using Atlas.Application.Organizations.Services;
@@ -22,11 +24,18 @@ namespace Atlas.Api.Controllers;
 public sealed class OrganizationsController : ControllerBase
 {
     private readonly IOrganizationService _organizationService;
+    private readonly ICurrentUserService _currentUserService;
 
-    public OrganizationsController(IOrganizationService organizationService)
+    public OrganizationsController(IOrganizationService organizationService, ICurrentUserService currentUserService)
     {
         _organizationService = organizationService;
+        _currentUserService = currentUserService;
     }
+
+    /// <summary>See TicketsController.ActorUserId — same defensive fallback, same reason. Newly needed here for Del 15's audit trail (create/rename/deactivate/reactivate all now record who did it).</summary>
+    private Guid ActorUserId =>
+        _currentUserService.UserId
+            ?? throw new AuthenticationException("The request's access token did not contain a valid user id.");
 
     /// <summary>
     /// GET /api/organizations?type=Customer&amp;isActive=true&amp;search=acme&amp;page=1&amp;pageSize=25
@@ -58,7 +67,7 @@ public sealed class OrganizationsController : ControllerBase
         [FromBody] CreateOrganizationRequest request,
         CancellationToken cancellationToken)
     {
-        var created = await _organizationService.CreateAsync(request, cancellationToken);
+        var created = await _organizationService.CreateAsync(request, ActorUserId, cancellationToken);
         return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);
     }
 
@@ -72,7 +81,7 @@ public sealed class OrganizationsController : ControllerBase
         [FromBody] RenameOrganizationRequest request,
         CancellationToken cancellationToken)
     {
-        var updated = await _organizationService.RenameAsync(id, request, cancellationToken);
+        var updated = await _organizationService.RenameAsync(id, request, ActorUserId, cancellationToken);
         return Ok(updated);
     }
 
@@ -82,7 +91,7 @@ public sealed class OrganizationsController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<OrganizationDetailDto>> Deactivate(Guid id, CancellationToken cancellationToken)
     {
-        var updated = await _organizationService.DeactivateAsync(id, cancellationToken);
+        var updated = await _organizationService.DeactivateAsync(id, ActorUserId, cancellationToken);
         return Ok(updated);
     }
 
@@ -92,7 +101,7 @@ public sealed class OrganizationsController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<OrganizationDetailDto>> Reactivate(Guid id, CancellationToken cancellationToken)
     {
-        var updated = await _organizationService.ReactivateAsync(id, cancellationToken);
+        var updated = await _organizationService.ReactivateAsync(id, ActorUserId, cancellationToken);
         return Ok(updated);
     }
 }

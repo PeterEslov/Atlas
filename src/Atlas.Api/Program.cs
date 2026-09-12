@@ -2,6 +2,7 @@ using System.Text;
 using Atlas.Api.Middleware;
 using Atlas.Api.OpenApi;
 using Atlas.Api.Services;
+using Atlas.Application.Audit.Services;
 using Atlas.Application.Auth.Services;
 using Atlas.Application.Common.Interfaces;
 using Atlas.Application.Organizations.Services;
@@ -108,6 +109,7 @@ builder.Services.AddScoped<IOrganizationService, OrganizationService>();
 builder.Services.AddScoped<IUserService, UserService>();
 builder.Services.AddScoped<IProjectService, ProjectService>();
 builder.Services.AddScoped<ITeamService, TeamService>();
+builder.Services.AddScoped<IAuditLogService, AuditLogService>();
 
 builder.Services.AddCors(options =>
 {

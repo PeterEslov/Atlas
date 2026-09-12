@@ -81,6 +81,15 @@ public static class DependencyInjection
         // Notifications table, which has existed in the schema since Fas 1.
         services.AddScoped<INotificationRepository, NotificationRepository>();
 
+        // Audit trail (Del 15) — the second Fas-1 table to get its first
+        // writer, the same story as Notifications above. Registered in
+        // AddPersistence, not a new AddAuditing() method of its own: unlike
+        // Redis (Del 13) or Service Bus (Del 12), this isn't a second
+        // external system Atlas.Worker might skip — it's the same AtlasDb
+        // connection every repository already uses, so there's no
+        // Atlas.Api-vs-Atlas.Worker split to justify pulling it out.
+        services.AddScoped<IAuditLogRepository, AuditLogRepository>();
+
         return services;
     }
 

@@ -1,4 +1,5 @@
 using Atlas.Application.Auth.Dtos;
+using Atlas.Application.Common;
 using Atlas.Application.Common.Exceptions;
 using Atlas.Application.Common.Interfaces;
 using Atlas.Domain.Entities;
@@ -14,6 +15,7 @@ public sealed class AuthService : IAuthService
     private readonly IPasswordHasher _passwordHasher;
     private readonly IJwtTokenGenerator _jwtTokenGenerator;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly IAuditLogRepository _auditLogRepository;
     private readonly ILogger<AuthService> _logger;
 
     public AuthService(
@@ -21,12 +23,14 @@ public sealed class AuthService : IAuthService
         IPasswordHasher passwordHasher,
         IJwtTokenGenerator jwtTokenGenerator,
         IUnitOfWork unitOfWork,
+        IAuditLogRepository auditLogRepository,
         ILogger<AuthService> logger)
     {
         _userRepository = userRepository;
         _passwordHasher = passwordHasher;
         _jwtTokenGenerator = jwtTokenGenerator;
         _unitOfWork = unitOfWork;
+        _auditLogRepository = auditLogRepository;
         _logger = logger;
     }
 
@@ -46,6 +50,22 @@ public sealed class AuthService : IAuthService
         user.SetPassword(_passwordHasher.Hash(request.Password));
 
         await _userRepository.AddAsync(user, cancellationToken);
+
+        // The audited entity IS the actor here — self-registration has no
+        // separate "who did this to whom", unlike e.g. UserService.ChangeRoleAsync
+        // below, where an admin acts on someone else. Password/hash is never
+        // part of NewValuesJson, on the same principle TicketHistory already
+        // follows for any field (never store secrets in a free-form audit blob
+        // that a wider set of people can read than can read the User table itself).
+        var auditLog = AuditLog.Create(
+            user.Id,
+            "Created",
+            nameof(User),
+            user.Id,
+            oldValuesJson: null,
+            newValuesJson: AuditLogSerializer.ToJson(new { fullName = user.FullName, email = user.Email, role = user.Role, organizationId = user.OrganizationId }));
+        await _auditLogRepository.AddAsync(auditLog, cancellationToken);
+
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         _logger.LogInformation("User {UserId} registered with role {Role}", user.Id, user.Role);

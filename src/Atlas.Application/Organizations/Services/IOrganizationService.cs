@@ -9,11 +9,11 @@ public interface IOrganizationService
 
     Task<OrganizationDetailDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken);
 
-    Task<OrganizationDetailDto> CreateAsync(CreateOrganizationRequest request, CancellationToken cancellationToken);
+    Task<OrganizationDetailDto> CreateAsync(CreateOrganizationRequest request, Guid actorUserId, CancellationToken cancellationToken);
 
-    Task<OrganizationDetailDto> RenameAsync(Guid id, RenameOrganizationRequest request, CancellationToken cancellationToken);
+    Task<OrganizationDetailDto> RenameAsync(Guid id, RenameOrganizationRequest request, Guid actorUserId, CancellationToken cancellationToken);
 
-    Task<OrganizationDetailDto> DeactivateAsync(Guid id, CancellationToken cancellationToken);
+    Task<OrganizationDetailDto> DeactivateAsync(Guid id, Guid actorUserId, CancellationToken cancellationToken);
 
-    Task<OrganizationDetailDto> ReactivateAsync(Guid id, CancellationToken cancellationToken);
+    Task<OrganizationDetailDto> ReactivateAsync(Guid id, Guid actorUserId, CancellationToken cancellationToken);
 }

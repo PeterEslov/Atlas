@@ -1,3 +1,4 @@
+using Atlas.Application.Common;
 using Atlas.Application.Common.Exceptions;
 using Atlas.Application.Common.Interfaces;
 using Atlas.Application.Common.Models;
@@ -21,15 +22,17 @@ public sealed class TicketService : ITicketService
     private readonly IBlobStorageService _blobStorageService;
     private readonly ITicketEventPublisher _ticketEventPublisher;
     private readonly ITicketStatsCache _ticketStatsCache;
+    private readonly IAuditLogRepository _auditLogRepository;
     private readonly ILogger<TicketService> _logger;
 
-    public TicketService(ITicketRepository ticketRepository, IUnitOfWork unitOfWork, IBlobStorageService blobStorageService, ITicketEventPublisher ticketEventPublisher, ITicketStatsCache ticketStatsCache, ILogger<TicketService> logger)
+    public TicketService(ITicketRepository ticketRepository, IUnitOfWork unitOfWork, IBlobStorageService blobStorageService, ITicketEventPublisher ticketEventPublisher, ITicketStatsCache ticketStatsCache, IAuditLogRepository auditLogRepository, ILogger<TicketService> logger)
     {
         _ticketRepository = ticketRepository;
         _unitOfWork = unitOfWork;
         _blobStorageService = blobStorageService;
         _ticketEventPublisher = ticketEventPublisher;
         _ticketStatsCache = ticketStatsCache;
+        _auditLogRepository = auditLogRepository;
         _logger = logger;
     }
 
@@ -231,18 +234,41 @@ public sealed class TicketService : ITicketService
     /// keeps its full TicketHistory audit trail, while this permanently removes
     /// the row and — via the Cascade delete configured in TicketConfigurations —
     /// its Comments, History, Tags and Attachments along with it. That's a real
-    /// tradeoff (the audit trail is gone, not just marked closed), which is why
-    /// it sits behind its own narrow Permissions.TicketDelete policy rather than
-    /// the general TicketUpdate permission that covers status changes.
+    /// tradeoff, which is why it sits behind its own narrow Permissions.TicketDelete
+    /// policy rather than the general TicketUpdate permission that covers status
+    /// changes.
+    ///
+    /// As of Del 15, "the audit trail is gone" is no longer quite true: an
+    /// AuditLog row is written below, *before* the ticket disappears, capturing
+    /// enough of a snapshot (title, status, priority) that "this ticket existed,
+    /// here's roughly what it was, and here's who deleted it and when" survives
+    /// the cascade even though TicketHistory itself does not. It's a snapshot,
+    /// not a substitute — the full comment thread, per-field change history and
+    /// attachments are still genuinely gone, which is exactly why TicketDelete
+    /// stays a narrow, separately-granted permission rather than something
+    /// TicketUpdate covers.
     /// </summary>
-    public async Task DeleteAsync(Guid ticketId, CancellationToken cancellationToken)
+    public async Task DeleteAsync(Guid ticketId, Guid actorUserId, CancellationToken cancellationToken)
     {
         var ticket = await GetTicketOrThrowAsync(ticketId, cancellationToken);
+
+        // Captured before Remove() below — Remove() only marks the tracked
+        // entity for deletion, it doesn't clear the in-memory object's own
+        // properties, but reading them here (rather than after) keeps this
+        // method reading the same way regardless of that implementation detail.
+        var auditLog = AuditLog.Create(
+            actorUserId,
+            "Deleted",
+            nameof(Ticket),
+            ticket.Id,
+            oldValuesJson: AuditLogSerializer.ToJson(new { title = ticket.Title, status = ticket.Status, priority = ticket.Priority, organizationId = ticket.OrganizationId }),
+            newValuesJson: null);
+        await _auditLogRepository.AddAsync(auditLog, cancellationToken);
 
         _ticketRepository.Remove(ticket);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        _logger.LogInformation("Ticket {TicketId} permanently deleted", ticketId);
+        _logger.LogInformation("Ticket {TicketId} permanently deleted by {ActorUserId}", ticketId, actorUserId);
 
         // A deleted ticket disappears from TotalCount and its status/priority
         // bucket alike — read ticket.OrganizationId before this point, since

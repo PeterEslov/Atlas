@@ -1,3 +1,4 @@
+using Atlas.Application.Common;
 using Atlas.Application.Common.Exceptions;
 using Atlas.Application.Common.Interfaces;
 using Atlas.Application.Common.Models;
@@ -20,12 +21,14 @@ public sealed class ProjectService : IProjectService
 {
     private readonly IProjectRepository _projectRepository;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly IAuditLogRepository _auditLogRepository;
     private readonly ILogger<ProjectService> _logger;
 
-    public ProjectService(IProjectRepository projectRepository, IUnitOfWork unitOfWork, ILogger<ProjectService> logger)
+    public ProjectService(IProjectRepository projectRepository, IUnitOfWork unitOfWork, IAuditLogRepository auditLogRepository, ILogger<ProjectService> logger)
     {
         _projectRepository = projectRepository;
         _unitOfWork = unitOfWork;
+        _auditLogRepository = auditLogRepository;
         _logger = logger;
     }
 
@@ -54,40 +57,57 @@ public sealed class ProjectService : IProjectService
         return ToDetailDto(project, memberDetails);
     }
 
-    public async Task<ProjectDetailDto> CreateAsync(CreateProjectRequest request, CancellationToken cancellationToken)
+    public async Task<ProjectDetailDto> CreateAsync(CreateProjectRequest request, Guid actorUserId, CancellationToken cancellationToken)
     {
         var project = Project.Create(request.OrganizationId, request.Name, request.Description);
 
         await _projectRepository.AddAsync(project, cancellationToken);
+        await RecordAuditAsync(actorUserId, "Created", project.Id, null, new { name = project.Name, organizationId = project.OrganizationId }, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        _logger.LogInformation("Project {ProjectId} '{Name}' created for organization {OrganizationId}", project.Id, project.Name, project.OrganizationId);
+        _logger.LogInformation("Project {ProjectId} '{Name}' created for organization {OrganizationId} by {ActorUserId}", project.Id, project.Name, project.OrganizationId, actorUserId);
 
         // Brand new, so there are no members yet without a query.
         return ToDetailDto(project, []);
     }
 
-    public async Task<ProjectDetailDto> ArchiveAsync(Guid id, CancellationToken cancellationToken)
+    public async Task<ProjectDetailDto> ArchiveAsync(Guid id, Guid actorUserId, CancellationToken cancellationToken)
     {
         var project = await GetProjectOrThrowAsync(id, cancellationToken);
 
         project.Archive();
+        await RecordAuditAsync(actorUserId, "Archived", project.Id, new { isArchived = false }, new { isArchived = true }, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        _logger.LogInformation("Project {ProjectId} archived", id);
+        _logger.LogInformation("Project {ProjectId} archived by {ActorUserId}", id, actorUserId);
         return ToDetailDto(project, await _projectRepository.GetMemberDetailsAsync(id, cancellationToken));
     }
 
-    public async Task<ProjectDetailDto> UnarchiveAsync(Guid id, CancellationToken cancellationToken)
+    public async Task<ProjectDetailDto> UnarchiveAsync(Guid id, Guid actorUserId, CancellationToken cancellationToken)
     {
         var project = await GetProjectOrThrowAsync(id, cancellationToken);
 
         project.Unarchive();
+        await RecordAuditAsync(actorUserId, "Unarchived", project.Id, new { isArchived = true }, new { isArchived = false }, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        _logger.LogInformation("Project {ProjectId} unarchived", id);
+        _logger.LogInformation("Project {ProjectId} unarchived by {ActorUserId}", id, actorUserId);
         return ToDetailDto(project, await _projectRepository.GetMemberDetailsAsync(id, cancellationToken));
     }
+
+    /// <summary>
+    /// See UserService.RecordAuditAsync — same "stage now, save once in the
+    /// caller" reasoning. Deliberately not called from AddMemberAsync/
+    /// RemoveMemberAsync below: same "not one of the audited entity's own
+    /// counted/security-relevant fields" reasoning Del 13 already used for
+    /// TicketService.AssignAsync not invalidating the stats cache — who is a
+    /// member of a project is routine day-to-day membership churn, not a
+    /// lifecycle event like creating or archiving the project itself.
+    /// </summary>
+    private Task RecordAuditAsync(Guid actorUserId, string action, Guid projectId, object? oldValues, object? newValues, CancellationToken cancellationToken) =>
+        _auditLogRepository.AddAsync(
+            AuditLog.Create(actorUserId, action, nameof(Project), projectId, AuditLogSerializer.ToJson(oldValues), AuditLogSerializer.ToJson(newValues)),
+            cancellationToken);
 
     public async Task<ProjectDetailDto> AddMemberAsync(Guid id, AddProjectMemberRequest request, CancellationToken cancellationToken)
     {

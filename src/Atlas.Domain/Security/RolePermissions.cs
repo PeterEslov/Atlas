@@ -11,7 +11,7 @@ namespace Atlas.Domain.Security;
 ///   Manager  -> Agent + Ticket.Delete, Project.Read, Project.Manage,
 ///               Team.Read, Team.Manage, User.Read, User.Manage,
 ///               Organization.Read
-///   Admin    -> everything, including Organization.Manage
+///   Admin    -> everything, including Organization.Manage and AuditLog.Read
 ///
 /// Organization.Manage (create/rename/deactivate an organization — i.e. adding
 /// or removing an entire tenant from the system) is deliberately Admin-only:
@@ -25,6 +25,17 @@ namespace Atlas.Domain.Security;
 /// an internal team is routine day-to-day work *inside* an organization a
 /// Manager already belongs to, not a tenant-boundary change, so there is no
 /// reason to reserve it for Admin the way Organization.Manage is.
+///
+/// AuditLog.Read (Del 15) is Admin-only, and deliberately NOT extended to
+/// Manager the way User.Manage/Project.Manage were: a Manager doing their own
+/// team's day-to-day work is one thing, but the audit trail also records
+/// things a Manager themselves did (e.g. a role change) plus other Managers'
+/// and Admins' actions across every organization — there's no per-organization
+/// filter on AuditLogs (see AuditLog's own doc comment and the "Known
+/// simplifications" note in docs/ARCHITECTURE.md), so granting it below Admin
+/// would mean any Manager can already see every tenant's audit history, not
+/// just their own — a materially bigger leak than Organization.Read causes
+/// today for the same reason.
 ///
 /// Looked up once at login time and baked into the JWT as "permission" claims
 /// (see Atlas.Infrastructure's JwtTokenGenerator) — a role change takes effect

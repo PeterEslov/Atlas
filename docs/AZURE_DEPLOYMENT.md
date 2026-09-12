@@ -777,15 +777,28 @@ cachar mot den riktiga Azure Cache for Redis-instansen, inte bara att
 endpointen svarar. Samma metodik som `scripts/test-del13-redis-cache.sh`
 redan använder lokalt, bara mot `$WEBAPP_NAME` istället för `localhost`.
 
-## Nästa: Del 15 — Audit Log
+## Del 15: Audit Log — inget nytt avsnitt behövs här
 
-Fas 4s enda återstående lokala arbete efter Del 13 är Del 15 (Audit Log) —
-`AuditLog`-tabellen har funnits i schemat sedan Fas 1 men fortfarande inget
-som skriver till den (se `docs/ARCHITECTURE.md`s "Current known
-simplifications"). Fas 4:s molnsida har nu två öppna punkter som väntar på
-samma beslut — *var* `Atlas.Worker` ska köras i Azure (avsnitt 9 ovan) — och
-en tredje, oberoende av den frågan, som bara väntar på att köras (avsnitt
-10 ovan, Redis). Fas 3s enda kvarvarande punkt är fortsatt Del 20
-(generalisera Key Vault-uppsättningen, byta ut den återanvända
-SQL-admin-inloggningen mot en snävare — nu med Redis-anslutningssträngen som
-ytterligare en hemlighet den generaliseringen får ta hand om).
+Del 15 (systemomfattande `AuditLog`) är klar och bekräftad fungerande
+lokalt, end-to-end (se `docs/ARCHITECTURE.md`s Del 15-avsnitt och
+`scripts/test-del15-audit-log.sh`) — men den får medvetet **inget eget
+numrerat avsnitt i den här filen**, till skillnad från Del 9/10/12/13 ovan.
+Anledningen är själva poängen: `AuditLogs` är bara ännu en tabell i samma
+Azure SQL-databas som Del 9 redan satte upp (avsnitt 7 ovan) — ingen ny
+Azure-resurs att provisionera, ingen ny hemlighet att lägga i Key Vault,
+ingen ny anslutningssträng eller managed-identity-roll att bevilja.
+Driftsättningen av Del 15 *är* driftsättningen av Del 9: så fort en ny EF
+Core-migrering med `AuditLogs`-tabellen körs mot samma Azure SQL-databas
+(`dotnet ef database update` mot den, precis som för alla tidigare Del)
+finns funktionen i molnet. Det är ett lika viktigt lärdomsmoment som alla de
+Del som *fick* ett eget avsnitt här: inte varje Del i koden motsvarar ett
+nytt steg i infrastrukturen.
+
+Fas 4:s molnsida har därför fortfarande bara de två öppna punkterna Del 13
+lämnade efter sig, oförändrade av Del 15 — *var* `Atlas.Worker` ska köras i
+Azure (avsnitt 9 ovan), och att faktiskt provisionera en Azure Cache for
+Redis-instans (avsnitt 10 ovan). Fas 3s enda kvarvarande punkt är
+fortsatt Del 20 (generalisera Key Vault-uppsättningen, byta ut den
+återanvända SQL-admin-inloggningen mot en snävare — nu med
+Redis-anslutningssträngen som ytterligare en hemlighet den
+generaliseringen får ta hand om).

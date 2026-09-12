@@ -123,13 +123,16 @@ Principle, not just a folder convention.
 - **Redis** (`Microsoft.Extensions.Caching.StackExchangeRedis`) — cache-aside
   for `GET /api/tickets/stats`, with explicit invalidation on the ticket
   writes that actually change it; see [Del 13](#roadmap) below
+- **System-wide audit trail** (`GET /api/audit-logs`) — no new technology:
+  `AuditLogs` reuses the same Azure SQL database every other table already
+  lives in; see [Del 15](#roadmap) below
 
 Planned for later phases (see [Roadmap](#roadmap)): Application Insights,
 Docker, Bicep, and a React frontend. (Key Vault and a CI/CD pipeline are
 already in place as of Del 8, Azure SQL and Blob Storage as of Del 9/10, a
 background worker as of Del 11, Service Bus publish/consume as of Del 12,
-and Redis caching as of Del 13 — see below — all pulled forward rather than
-left for later.)
+Redis caching as of Del 13, and the audit trail as of Del 15 — see below —
+all pulled forward rather than left for later.)
 
 ## Project structure
 
@@ -139,24 +142,29 @@ src/
   Atlas.Domain/            Entities, enums, domain exceptions, Permissions/RolePermissions
   Atlas.Application/       DTOs, service interfaces — TicketService, AuthService,
                            OrganizationService, UserService, ProjectService, TeamService;
-                           ITicketEventPublisher (Del 12), ITicketStatsCache (Del 13)
+                           ITicketEventPublisher (Del 12), ITicketStatsCache (Del 13);
+                           Audit/ — IAuditLogService, AuditLogService (Del 15)
   Atlas.Infrastructure/    EF Core DbContext, entity configurations, repositories
                            (Ticket, User, Organization, Project, Team), JwtTokenGenerator,
                            Pbkdf2PasswordHasher, Messaging/ServiceBusTicketEventPublisher
-                           (Del 12), Caching/RedisTicketStatsCache (Del 13)
-  Atlas.Api/               Controllers (Tickets, Auth, Organizations, Users, Projects, Teams),
-                           Program.cs, appsettings
+                           (Del 12), Caching/RedisTicketStatsCache (Del 13),
+                           Repositories/AuditLogRepository (Del 15)
+  Atlas.Api/               Controllers (Tickets, Auth, Organizations, Users, Projects, Teams,
+                           AuditLogs), Program.cs, appsettings
   Atlas.Worker/            .NET Generic Host (Del 11) — OverdueTicketWorker (polls every
                            5 minutes) and TicketAssignedConsumer (Del 12, Service Bus)
 tests/
   Atlas.Domain.Tests/       xUnit tests for Ticket's business rules, RolePermissions, User,
-                           Organization, Project, Team
+                           Organization, Project, Team, AuditLog
 sql/
   001_InitialSchema.sql     Hand-written T-SQL reference (see note below)
   002_SeedData.sql          Optional demo data (Northstar IT / ACME AB / one ticket)
 scripts/
   test-del13-redis-cache.sh Cache-hit/invalidation/fail-open smoke test for Del 13 (see
                            the "Try it" section above)
+  test-del15-audit-log.sh  End-to-end smoke test for Del 15 — 7 checks across
+                           User/Organization/Project/Ticket audit events plus the
+                           Admin-only access check (see the "Try it" section above)
 docs/
   ARCHITECTURE.md
   AZURE_DEPLOYMENT.md
@@ -505,6 +513,12 @@ curl "https://localhost:5081/api/tickets/<ticket-guid>/attachments/<attachment-g
 # the full cache-hit/invalidation/fail-open test sequence
 curl "https://localhost:5081/api/tickets/stats" -k \
      -H "Authorization: Bearer $TOKEN"
+
+# Audit trail (Del 15) — Admin-only (Permissions.AuditLogRead); an Agent or
+# Manager token gets 403 here, not an empty list. Newest first; filter by
+# any combination of entityName/entityId/userId/action/fromUtc/toUtc.
+curl "https://localhost:5081/api/audit-logs?entityName=Ticket&action=Deleted&page=1&pageSize=25" -k \
+     -H "Authorization: Bearer $TOKEN"
 ```
 
 ### 9. Run the tests
@@ -575,6 +589,12 @@ endpoints in the API. Every other endpoint requires an
   `Project.Manage` existed in `Permissions` since early on but had no
   controller wired up to them until this Del; `Team.Read`/`Team.Manage` are
   new permissions introduced by it.
+- **AuditLog.Read (Del 15) is deliberately Admin-only** — narrower than
+  `User.Manage`/`Project.Manage`/`Organization.Read`, all of which Manager
+  already has. `GET /api/audit-logs` has no per-organization filter, so
+  granting it at Manager level would let a Manager see every organization's
+  audit trail, not just their own — see `docs/ARCHITECTURE.md`'s Del 15
+  section for the full reasoning.
 
 ## Business rules worth reading
 
@@ -613,17 +633,21 @@ database.
       SQL login"
 - [~] **Phase 4 — Enterprise**: Del 11 (background worker for overdue-ticket
       notifications), Del 12 (Azure Service Bus, real-time
-      `TicketAssigned` notifications), and Del 13 (Redis cache-aside for
-      `GET /api/tickets/stats`) all confirmed working end-to-end locally
-      (2026-09-11/12) — a second host process, `Atlas.Worker` (.NET Generic
-      Host, not ASP.NET Core), polls every 5 minutes for overdue tickets
-      *and* consumes Service Bus events `Atlas.Api` publishes on ticket
-      assignment, writing to the same `Notifications` table through
-      `AtlasDb` either way; a new dashboard query, ticket counts by status
-      and priority, is cached in Redis with explicit invalidation on the
-      writes that actually change it (status, priority, create, delete —
-      deliberately *not* assignment or comments); audit logging (Del 15)
-      remains, as does deciding `Atlas.Worker`'s Azure hosting shape and
+      `TicketAssigned` notifications), Del 13 (Redis cache-aside for
+      `GET /api/tickets/stats`), and Del 15 (system-wide audit trail) all
+      confirmed working end-to-end locally (2026-09-11/12) — a second host
+      process, `Atlas.Worker` (.NET Generic Host, not ASP.NET Core), polls
+      every 5 minutes for overdue tickets *and* consumes Service Bus events
+      `Atlas.Api` publishes on ticket assignment, writing to the same
+      `Notifications` table through `AtlasDb` either way; a new dashboard
+      query, ticket counts by status and priority, is cached in Redis with
+      explicit invalidation on the writes that actually change it (status,
+      priority, create, delete — deliberately *not* assignment or
+      comments); and `AuditLogs` now gets written to on every
+      security/compliance-relevant event across Users, Organizations,
+      Projects and Ticket deletion, atomically with the change itself,
+      readable only by Admin. What remains for this phase is entirely on
+      the Azure side: deciding `Atlas.Worker`'s Azure hosting shape and
       provisioning an actual Azure Cache for Redis instance (see
       `docs/AZURE_DEPLOYMENT.md` sections 9–10)
 - [ ] **Phase 5 — Quality**: broader test suite, Docker, structured logging, monitoring

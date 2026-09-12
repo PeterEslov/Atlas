@@ -1,3 +1,4 @@
+using Atlas.Application.Common;
 using Atlas.Application.Common.Exceptions;
 using Atlas.Application.Common.Interfaces;
 using Atlas.Application.Common.Models;
@@ -20,15 +21,18 @@ public sealed class OrganizationService : IOrganizationService
 {
     private readonly IOrganizationRepository _organizationRepository;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly IAuditLogRepository _auditLogRepository;
     private readonly ILogger<OrganizationService> _logger;
 
     public OrganizationService(
         IOrganizationRepository organizationRepository,
         IUnitOfWork unitOfWork,
+        IAuditLogRepository auditLogRepository,
         ILogger<OrganizationService> logger)
     {
         _organizationRepository = organizationRepository;
         _unitOfWork = unitOfWork;
+        _auditLogRepository = auditLogRepository;
         _logger = logger;
     }
 
@@ -53,7 +57,7 @@ public sealed class OrganizationService : IOrganizationService
         return ToDetailDto(organization, counts);
     }
 
-    public async Task<OrganizationDetailDto> CreateAsync(CreateOrganizationRequest request, CancellationToken cancellationToken)
+    public async Task<OrganizationDetailDto> CreateAsync(CreateOrganizationRequest request, Guid actorUserId, CancellationToken cancellationToken)
     {
         if (await _organizationRepository.NameExistsAsync(request.Name, cancellationToken))
         {
@@ -65,46 +69,57 @@ public sealed class OrganizationService : IOrganizationService
         var organization = Organization.Create(request.Name, request.Type);
 
         await _organizationRepository.AddAsync(organization, cancellationToken);
+        await RecordAuditAsync(actorUserId, "Created", organization.Id, null, new { name = organization.Name, type = organization.Type }, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        _logger.LogInformation("Organization {OrganizationId} '{Name}' created", organization.Id, organization.Name);
+        _logger.LogInformation("Organization {OrganizationId} '{Name}' created by {ActorUserId}", organization.Id, organization.Name, actorUserId);
 
         // Brand new, so its child counts are trivially zero without a query.
         return ToDetailDto(organization, (0, 0, 0));
     }
 
-    public async Task<OrganizationDetailDto> RenameAsync(Guid id, RenameOrganizationRequest request, CancellationToken cancellationToken)
+    public async Task<OrganizationDetailDto> RenameAsync(Guid id, RenameOrganizationRequest request, Guid actorUserId, CancellationToken cancellationToken)
     {
         var organization = await GetOrganizationOrThrowAsync(id, cancellationToken);
+        var oldName = organization.Name;
 
         organization.Rename(request.Name);
+        await RecordAuditAsync(actorUserId, "Renamed", organization.Id, new { name = oldName }, new { name = organization.Name }, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        _logger.LogInformation("Organization {OrganizationId} renamed to '{Name}'", id, request.Name);
+        _logger.LogInformation("Organization {OrganizationId} renamed to '{Name}' by {ActorUserId}", id, request.Name, actorUserId);
         return ToDetailDto(organization, await _organizationRepository.GetChildCountsAsync(id, cancellationToken));
     }
 
-    public async Task<OrganizationDetailDto> DeactivateAsync(Guid id, CancellationToken cancellationToken)
+    public async Task<OrganizationDetailDto> DeactivateAsync(Guid id, Guid actorUserId, CancellationToken cancellationToken)
     {
         var organization = await GetOrganizationOrThrowAsync(id, cancellationToken);
 
         organization.Deactivate();
+        await RecordAuditAsync(actorUserId, "Deactivated", organization.Id, new { isActive = true }, new { isActive = false }, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        _logger.LogInformation("Organization {OrganizationId} deactivated", id);
+        _logger.LogInformation("Organization {OrganizationId} deactivated by {ActorUserId}", id, actorUserId);
         return ToDetailDto(organization, await _organizationRepository.GetChildCountsAsync(id, cancellationToken));
     }
 
-    public async Task<OrganizationDetailDto> ReactivateAsync(Guid id, CancellationToken cancellationToken)
+    public async Task<OrganizationDetailDto> ReactivateAsync(Guid id, Guid actorUserId, CancellationToken cancellationToken)
     {
         var organization = await GetOrganizationOrThrowAsync(id, cancellationToken);
 
         organization.Reactivate();
+        await RecordAuditAsync(actorUserId, "Reactivated", organization.Id, new { isActive = false }, new { isActive = true }, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        _logger.LogInformation("Organization {OrganizationId} reactivated", id);
+        _logger.LogInformation("Organization {OrganizationId} reactivated by {ActorUserId}", id, actorUserId);
         return ToDetailDto(organization, await _organizationRepository.GetChildCountsAsync(id, cancellationToken));
     }
+
+    /// <summary>See UserService.RecordAuditAsync — same "stage now, save once in the caller" reasoning.</summary>
+    private Task RecordAuditAsync(Guid actorUserId, string action, Guid organizationId, object? oldValues, object? newValues, CancellationToken cancellationToken) =>
+        _auditLogRepository.AddAsync(
+            AuditLog.Create(actorUserId, action, nameof(Organization), organizationId, AuditLogSerializer.ToJson(oldValues), AuditLogSerializer.ToJson(newValues)),
+            cancellationToken);
 
     private async Task<Organization> GetOrganizationOrThrowAsync(Guid id, CancellationToken cancellationToken)
     {

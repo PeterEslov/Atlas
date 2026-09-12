@@ -35,8 +35,8 @@ public interface ITicketService
     /// <summary>Removes a tag from a ticket by name. A no-op — not a 404 — if the ticket doesn't have that tag.</summary>
     Task<TicketDetailDto> RemoveTagAsync(Guid ticketId, RemoveTicketTagRequest request, Guid actorUserId, CancellationToken cancellationToken);
 
-    /// <summary>Hard-deletes a ticket. See the doc comment on the implementation for why this is distinct from a status change.</summary>
-    Task DeleteAsync(Guid ticketId, CancellationToken cancellationToken);
+    /// <summary>Hard-deletes a ticket. See the doc comment on the implementation for why this is distinct from a status change, and for what Del 15 still preserves after the delete.</summary>
+    Task DeleteAsync(Guid ticketId, Guid actorUserId, CancellationToken cancellationToken);
 
     /// <summary>
     /// Uploads a file to Azure Blob Storage (Del 10) and records it as an Attachment

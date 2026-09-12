@@ -9,11 +9,11 @@ public interface IProjectService
 
     Task<ProjectDetailDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken);
 
-    Task<ProjectDetailDto> CreateAsync(CreateProjectRequest request, CancellationToken cancellationToken);
+    Task<ProjectDetailDto> CreateAsync(CreateProjectRequest request, Guid actorUserId, CancellationToken cancellationToken);
 
-    Task<ProjectDetailDto> ArchiveAsync(Guid id, CancellationToken cancellationToken);
+    Task<ProjectDetailDto> ArchiveAsync(Guid id, Guid actorUserId, CancellationToken cancellationToken);
 
-    Task<ProjectDetailDto> UnarchiveAsync(Guid id, CancellationToken cancellationToken);
+    Task<ProjectDetailDto> UnarchiveAsync(Guid id, Guid actorUserId, CancellationToken cancellationToken);
 
     Task<ProjectDetailDto> AddMemberAsync(Guid id, AddProjectMemberRequest request, CancellationToken cancellationToken);
 

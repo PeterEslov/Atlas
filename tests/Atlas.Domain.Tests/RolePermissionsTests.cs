@@ -64,6 +64,17 @@ public class RolePermissionsTests
         Assert.Contains(Permissions.TeamManage, managerPermissions);
     }
 
+    [Fact]
+    public void Manager_CannotReadAuditLog()
+    {
+        // AuditLog.Read (Del 15) deliberately stops at Admin — see the doc
+        // comment on RolePermissions for why this is narrower than the
+        // Manager-level trust User.Manage/Project.Manage/OrganizationRead get.
+        var managerPermissions = RolePermissions.For(UserRole.Manager);
+
+        Assert.DoesNotContain(Permissions.AuditLogRead, managerPermissions);
+    }
+
     [Theory]
     [InlineData(UserRole.Customer)]
     [InlineData(UserRole.Agent)]

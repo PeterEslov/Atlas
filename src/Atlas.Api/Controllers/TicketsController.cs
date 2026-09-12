@@ -259,7 +259,7 @@ public sealed class TicketsController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
     {
-        await _ticketService.DeleteAsync(id, cancellationToken);
+        await _ticketService.DeleteAsync(id, ActorUserId, cancellationToken);
         return NoContent();
     }
 }

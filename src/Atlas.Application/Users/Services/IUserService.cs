@@ -9,9 +9,9 @@ public interface IUserService
 
     Task<UserDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken);
 
-    Task<UserDto> ChangeRoleAsync(Guid id, ChangeUserRoleRequest request, CancellationToken cancellationToken);
+    Task<UserDto> ChangeRoleAsync(Guid id, ChangeUserRoleRequest request, Guid actorUserId, CancellationToken cancellationToken);
 
-    Task<UserDto> DeactivateAsync(Guid id, CancellationToken cancellationToken);
+    Task<UserDto> DeactivateAsync(Guid id, Guid actorUserId, CancellationToken cancellationToken);
 
-    Task<UserDto> ReactivateAsync(Guid id, CancellationToken cancellationToken);
+    Task<UserDto> ReactivateAsync(Guid id, Guid actorUserId, CancellationToken cancellationToken);
 }

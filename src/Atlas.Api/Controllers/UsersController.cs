@@ -1,3 +1,4 @@
+using Atlas.Application.Common.Exceptions;
 using Atlas.Application.Common.Interfaces;
 using Atlas.Application.Common.Models;
 using Atlas.Application.Users.Dtos;
@@ -30,6 +31,11 @@ public sealed class UsersController : ControllerBase
         _userService = userService;
         _currentUserService = currentUserService;
     }
+
+    /// <summary>See TicketsController.ActorUserId — same defensive fallback, same reason.</summary>
+    private Guid ActorUserId =>
+        _currentUserService.UserId
+            ?? throw new AuthenticationException("The request's access token did not contain a valid user id.");
 
     /// <summary>
     /// GET /api/users?organizationId={guid}&amp;role=Agent&amp;isActive=true&amp;search=anna&amp;page=1&amp;pageSize=25
@@ -81,7 +87,7 @@ public sealed class UsersController : ControllerBase
             throw new DomainException("You cannot change your own role.");
         }
 
-        var updated = await _userService.ChangeRoleAsync(id, request, cancellationToken);
+        var updated = await _userService.ChangeRoleAsync(id, request, ActorUserId, cancellationToken);
         return Ok(updated);
     }
 
@@ -98,7 +104,7 @@ public sealed class UsersController : ControllerBase
             throw new DomainException("You cannot deactivate your own account.");
         }
 
-        var updated = await _userService.DeactivateAsync(id, cancellationToken);
+        var updated = await _userService.DeactivateAsync(id, ActorUserId, cancellationToken);
         return Ok(updated);
     }
 
@@ -108,7 +114,7 @@ public sealed class UsersController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<UserDto>> Reactivate(Guid id, CancellationToken cancellationToken)
     {
-        var updated = await _userService.ReactivateAsync(id, cancellationToken);
+        var updated = await _userService.ReactivateAsync(id, ActorUserId, cancellationToken);
         return Ok(updated);
     }
 }

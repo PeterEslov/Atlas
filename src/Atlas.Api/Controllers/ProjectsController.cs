@@ -1,3 +1,5 @@
+using Atlas.Application.Common.Exceptions;
+using Atlas.Application.Common.Interfaces;
 using Atlas.Application.Common.Models;
 using Atlas.Application.Projects.Dtos;
 using Atlas.Application.Projects.Services;
@@ -25,11 +27,18 @@ namespace Atlas.Api.Controllers;
 public sealed class ProjectsController : ControllerBase
 {
     private readonly IProjectService _projectService;
+    private readonly ICurrentUserService _currentUserService;
 
-    public ProjectsController(IProjectService projectService)
+    public ProjectsController(IProjectService projectService, ICurrentUserService currentUserService)
     {
         _projectService = projectService;
+        _currentUserService = currentUserService;
     }
+
+    /// <summary>See TicketsController.ActorUserId — same defensive fallback, same reason. Newly needed here for Del 15's audit trail (create/archive/unarchive now record who did it; AddMember/RemoveMember deliberately don't — see ProjectService.RecordAuditAsync).</summary>
+    private Guid ActorUserId =>
+        _currentUserService.UserId
+            ?? throw new AuthenticationException("The request's access token did not contain a valid user id.");
 
     /// <summary>
     /// GET /api/projects?organizationId={guid}&amp;isArchived=false&amp;search=onboarding&amp;page=1&amp;pageSize=25
@@ -61,7 +70,7 @@ public sealed class ProjectsController : ControllerBase
         [FromBody] CreateProjectRequest request,
         CancellationToken cancellationToken)
     {
-        var created = await _projectService.CreateAsync(request, cancellationToken);
+        var created = await _projectService.CreateAsync(request, ActorUserId, cancellationToken);
         return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);
     }
 
@@ -71,7 +80,7 @@ public sealed class ProjectsController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<ProjectDetailDto>> Archive(Guid id, CancellationToken cancellationToken)
     {
-        var updated = await _projectService.ArchiveAsync(id, cancellationToken);
+        var updated = await _projectService.ArchiveAsync(id, ActorUserId, cancellationToken);
         return Ok(updated);
     }
 
@@ -82,7 +91,7 @@ public sealed class ProjectsController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<ProjectDetailDto>> Unarchive(Guid id, CancellationToken cancellationToken)
     {
-        var updated = await _projectService.UnarchiveAsync(id, cancellationToken);
+        var updated = await _projectService.UnarchiveAsync(id, ActorUserId, cancellationToken);
         return Ok(updated);
     }
 
