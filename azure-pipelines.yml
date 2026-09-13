@@ -22,7 +22,7 @@ pr:
 
 variables:
   buildConfiguration: 'Release'
-  azureServiceConnection: 'sc-projectatlas-dev-sc'   # set to your actual service connection name (docs/AZURE_DEPLOYMENT.md section 5)
+  azureServiceConnection: 'project-atlas-connectionname'   # set to your actual service connection name (docs/AZURE_DEPLOYMENT.md section 5)
   webAppName: 'app-projectatlas-dev-sc'              # set to your actual Web App name (docs/AZURE_DEPLOYMENT.md section 1)
 
 stages:
