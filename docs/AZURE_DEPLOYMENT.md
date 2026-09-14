@@ -276,7 +276,7 @@ steget nedan misslyckas med ett behörighetsfel är det nästan alltid det här.
    det här ena projektets resurser, inte hela prenumerationen. Välj din
    prenumeration (`PetersSubscriptionForTest`) och resursgrupp
    (`$RG`, dvs. `rg-projectatlas-dev-sc`).
-3. Ge den ett namn du känner igen, t.ex. `sc-projectatlas-dev-sc`, och spara.
+3. Ge den ett namn du känner igen, t.ex. `project-atlas-connectionname`, och spara.
    Det namnet är det enda pipelinen behöver referera till — Azure DevOps
    lagrar och hanterar App Registration, service principal *och* det
    federerade förtroendet bakom den namngivna service connection-posten. Inga
@@ -293,7 +293,7 @@ och sätt den till exakt det namn du valde:
 
 ```yaml
 variables:
-  azureServiceConnection: 'sc-projectatlas-dev-sc'   # namnet från steg 3
+  azureServiceConnection: 'project-atlas-connectionname'   # namnet från steg 3
   webAppName: 'app-projectatlas-dev-sc'
 ```
 
