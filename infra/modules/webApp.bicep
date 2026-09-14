@@ -41,6 +41,9 @@ param appInsightsConnectionString string
 @description('Enable the Swagger UI surface. A deliberate demo-project choice — see the EnableSwaggerUi comment in Program.cs.')
 param enableSwaggerUi bool = true
 
+@description('Keep the app loaded instead of unloading it after 20 minutes idle. Defaults to false because Azure\'s Free (F1) tier — this project\'s default App Service plan SKU, see appServicePlan.bicep — does not support Always On at all; a `create` with this true on F1 fails outright. Only set true once running on Basic (B1) or higher, where it\'s worth the (small) cost to avoid cold starts.')
+param alwaysOn bool = false
+
 resource webApp 'Microsoft.Web/sites@2023-01-01' = {
   name: name
   location: location
@@ -52,7 +55,7 @@ resource webApp 'Microsoft.Web/sites@2023-01-01' = {
     httpsOnly: true
     siteConfig: {
       linuxFxVersion: 'DOTNETCORE|10.0'
-      alwaysOn: true
+      alwaysOn: alwaysOn
       appSettings: [
         { name: 'Jwt__Issuer', value: 'ProjectAtlas' }
         { name: 'Jwt__Audience', value: 'ProjectAtlas.Api' }

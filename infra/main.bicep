@@ -81,6 +81,9 @@ param webAppName string = 'app-${appName}-${stage}-sc'
 @description('Enable the Swagger UI surface on the deployed API — see the EnableSwaggerUi comment in Program.cs.')
 param enableSwaggerUi bool = true
 
+@description('Keep the Web App loaded instead of unloading it after 20 minutes idle. Defaults to false — Azure\'s Free (F1) tier does not support Always On at all; see the alwaysOn comment in modules/webApp.bicep. Only set true once appServicePlanSkuName is B1 or higher.')
+param webAppAlwaysOn bool = false
+
 @description('Name of the existing Key Vault Atlas.Api reads secrets from (docs/AZURE_DEPLOYMENT.md section 3). No default — this is your own pre-existing vault.')
 param keyVaultName string
 
@@ -169,6 +172,7 @@ module webApp 'modules/webApp.bicep' = {
     serviceBusNamespaceHostname: '${serviceBusNamespaceName}.servicebus.windows.net'
     appInsightsConnectionString: appInsights.outputs.connectionString
     enableSwaggerUi: enableSwaggerUi
+    alwaysOn: webAppAlwaysOn
   }
 }
 
