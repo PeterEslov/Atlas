@@ -13,6 +13,9 @@
 # Del 18 added a second job to BuildAndTest, DockerBuild — see its own
 # comment below for why it's a separate job, and why it deliberately only
 # builds the Del 17 image rather than pushing it anywhere.
+#
+# Del 19 added a third job, BicepValidate — see its own comment below for
+# why it only compiles infra/*.bicep rather than deploying it.
 
 trigger:
   branches:
@@ -26,7 +29,7 @@ pr:
 
 variables:
   buildConfiguration: 'Release'
-  azureServiceConnection: 'sc-projectatlas-dev-sc'   # set to your actual service connection name (docs/AZURE_DEPLOYMENT.md section 5)
+  azureServiceConnection: 'project-atlas-connectionname'   # matches the service connection name actually created in Azure DevOps (docs/AZURE_DEPLOYMENT.md section 5)
   webAppName: 'app-projectatlas-dev-sc'              # set to your actual Web App name (docs/AZURE_DEPLOYMENT.md section 1)
 
 stages:
@@ -113,6 +116,40 @@ stages:
         steps:
           - script: docker build -f src/Atlas.Api/Dockerfile -t projectatlas-api:$(Build.BuildId) .
             displayName: 'docker build (Atlas.Api, multi-stage)'
+
+      # Del 19 — a third parallel job, same reasoning as DockerBuild above:
+      # `infra/main.bicep` needs none of Build's dotnet output, so it gets
+      # its own job rather than a step tacked onto Build.
+      #
+      # Deliberately `az bicep build` only — compiles infra/*.bicep to ARM
+      # JSON and fails on any syntax/type error, but makes no Azure API
+      # calls at all, so it needs no service connection and costs nothing
+      # to run on every push. It deliberately does NOT run `az deployment
+      # group what-if` or `create`: those need real values for the
+      # existing-resource parameters (Key Vault name, SQL server name,
+      # Service Bus namespace — all environment-specific, see
+      # infra/main.parameters.json), and `create` would actually provision
+      # or change billable Azure resources (Application Insights, Redis)
+      # on every push to main — exactly the kind of unattended cost/risk
+      # this project has avoided everywhere else (see docs/AZURE_DEPLOYMENT.md's
+      # own "you run this yourself" reasoning). Deploying infra/ stays a
+      # deliberate, manual `az deployment group create` — see
+      # infra/main.bicep's own header comment for the exact command.
+      #
+      # No explicit Bicep setup task needed: Azure Pipelines' Microsoft-
+      # hosted ubuntu-latest pool image ships the Azure CLI preinstalled,
+      # and `az bicep install` (below) fetches the Bicep CLI extension the
+      # same way it's fetched on a developer machine the first time `az
+      # bicep` runs.
+      - job: BicepValidate
+        displayName: 'Bicep syntax check (Del 19 templates — compiled, not deployed)'
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - script: az bicep install
+            displayName: 'az bicep install'
+          - script: az bicep build --file infra/main.bicep
+            displayName: 'az bicep build (infra/main.bicep + infra/modules/*.bicep)'
 
   - stage: Deploy
     displayName: 'Deploy to Azure App Service'

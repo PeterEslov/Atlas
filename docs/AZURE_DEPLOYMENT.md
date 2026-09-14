@@ -276,12 +276,13 @@ steget nedan misslyckas med ett behörighetsfel är det nästan alltid det här.
    det här ena projektets resurser, inte hela prenumerationen. Välj din
    prenumeration (`PetersSubscriptionForTest`) och resursgrupp
    (`$RG`, dvs. `rg-projectatlas-dev-sc`).
-3. Ge den ett namn du känner igen, t.ex. `sc-projectatlas-dev-sc`, och spara.
-   Det namnet är det enda pipelinen behöver referera till — Azure DevOps
-   lagrar och hanterar App Registration, service principal *och* det
-   federerade förtroendet bakom den namngivna service connection-posten. Inga
-   client-id/tenant-id/subscription-id-värden att kopiera någonstans, till
-   skillnad från GitHub-flödet.
+3. Ge den ett namn du känner igen och spara. Peters faktiska service
+   connection i det här projektet heter `project-atlas-connectionname` — vad
+   du än väljer att kalla din, det namnet är det enda pipelinen behöver
+   referera till. Azure DevOps lagrar och hanterar App Registration, service
+   principal *och* det federerade förtroendet bakom den namngivna service
+   connection-posten. Inga client-id/tenant-id/subscription-id-värden att
+   kopiera någonstans, till skillnad från GitHub-flödet.
 4. **Pipelines** → **New pipeline** → **Azure Repos Git** → välj ditt repo →
    **Existing Azure Pipelines YAML file** → `/azure-pipelines.yml` (filen
    som redan ligger i repots rot, se nedan) → **Save** (kör inte än om du
@@ -289,11 +290,17 @@ steget nedan misslyckas med ett behörighetsfel är det nästan alltid det här.
 
 `azure-pipelines.yml` i repots rot refererar till service connection-namnet
 från steg 3 via variabeln `azureServiceConnection` överst i filen — öppna den
-och sätt den till exakt det namn du valde:
+och sätt den till exakt det namn du valde. Ett första körningsförsök gav en
+konkret påminnelse om varför det här steget är värt att dubbelkolla: filen
+låg kvar med en generisk platshållare (`sc-projectatlas-dev-sc`) från när
+Del 8 skrevs, medan service connection-posten i Azure DevOps faktiskt döptes
+till `project-atlas-connectionname` — Deploy-stadiet failade tills variabeln
+uppdaterades till att matcha den verkliga posten. Namnet i pipelinen och
+namnet i Azure DevOps måste vara exakt lika, tecken för tecken:
 
 ```yaml
 variables:
-  azureServiceConnection: 'sc-projectatlas-dev-sc'   # namnet från steg 3
+  azureServiceConnection: 'project-atlas-connectionname'   # namnet från steg 3
   webAppName: 'app-projectatlas-dev-sc'
 ```
 
@@ -942,3 +949,43 @@ fungerande end-to-end lokalt) — se README.md:s Roadmap. Fas 4:s och Fas 3:s
 Azure, en riktig Azure Cache for Redis-instans, en riktig Application
 Insights-resurs, och Del 20:s Key Vault-generalisering (avsnitt 9–11 och
 punkten om Fas 3 ovan).
+
+## Del 18: CI/CD — ingen ny Azure-resurs, bara en pipelineutökning
+
+Del 18 (`DockerBuild`-jobbet i `azure-pipelines.yml`s `BuildAndTest`-stadium,
+se `docs/ARCHITECTURE.md`s Del 18-avsnitt) är klar och bekräftad fungerande
+mot den skarpa pipelinen (2026-09-14). Precis som Del 17 får den medvetet
+**inget eget numrerat provisioneringsavsnitt här** — men av ett tredje skäl,
+skilt från både Del 15:s ("redan samma databas") och Del 16:s/Del 17:s
+("rör sig aldrig i närheten av Azure"): Del 18 rör sig visserligen mitt i
+den befintliga Azure-pipelinen från avsnitt 5, men *lägger inte till* någon
+ny Azure-resurs där. `DockerBuild` kör `docker build` på Microsoft-hostade
+`ubuntu-latest`-agenter — samma slags byggmaskin `Build`-jobbet redan kör
+på — bygger avbildningen, och kastar bort den igen. Inget nytt Container
+Registry, ingen ny roll, ingen ny hemlighet i Key Vault. Steg 4 ovan
+("Pipelines → New pipeline → ... → Save") är fortfarande hela
+etableringssteget — `azure-pipelines.yml` i repot är redan den fil som
+gäller, och Del 18:s ändring i den filen kräver ingen ny åtgärd i Azure
+DevOps portalen utöver att pusha koden.
+
+Den enda verkliga Azure-relaterade läxan Del 18 gav var inte
+containerrelaterad alls: `azureServiceConnection`-variabeln överst i
+`azure-pipelines.yml` hade sedan Del 8 stått kvar med ett generiskt
+exempelvärde (`sc-projectatlas-dev-sc`) i stället för det namn Peter
+faktiskt gav sin service connection när han skapade den
+(`project-atlas-connectionname`) — se steg 3 ovan, som nu visar det
+verkliga namnet. Ingenting hade körts igenom hela pipelinen från början
+till slut sedan Del 8/9, så mismatchen låg dold tills Del 18:s första
+körning nådde `Deploy`-stadiet och failade där, med ett felmeddelande som
+inte kunde hitta service connection-posten. Rättat i både filen och det här
+dokumentet; efter det gick både `BuildAndTest` (`Build` och `DockerBuild`)
+och `Deploy` gröna.
+
+Om/när `DockerBuild` någon gång utökas till att faktiskt pusha till ett
+Azure Container Registry, och App Service i så fall byter till "Web App for
+Containers" (det öppna vägvalet Del 17:s och Del 18:s egna avsnitt i
+`docs/ARCHITECTURE.md` båda flaggar), *då* får Fas 6 sitt första riktiga
+provisioneringsavsnitt här — ett nytt Container Registry att skapa, en ny
+roll (`AcrPush` för pipelinens service connection, `AcrPull` för App
+Service:s managed identity) att bevilja. Tills dess är Fas 6:s enda
+återstående punkt Del 19 (Bicep) — se README.md:s Roadmap.

@@ -149,8 +149,10 @@ Azure SQL and Blob Storage as of Del 9/10, a background worker as of Del 11,
 Service Bus publish/consume as of Del 12, Redis caching as of Del 13,
 structured logging with an optional Application Insights sink as of Del 14,
 the audit trail as of Del 15, a broader test suite (93 unit + 19 integration
-tests) as of Del 16, and the whole local stack running in Docker as of
-Del 17 — see below — all pulled forward rather than left for later.)
+tests) as of Del 16, the whole local stack running in Docker as of Del 17,
+and that Docker image now verified — built, not yet pushed anywhere — on
+every CI run as of Del 18 — see below — all pulled forward rather than left
+for later.)
 
 ## Project structure
 
@@ -660,7 +662,17 @@ from Azure DevOps), Azure SQL wired in via Key Vault (section 7), and how
 to verify it. As of Del 9 (confirmed working end-to-end 2026-09-10), the
 whole API is functional in Azure — not just `/health` and Swagger — since
 App Service can finally reach a real cloud database instead of the local
-SQL Server this project used through Del 1–7.
+SQL Server this project used through Del 1–7. Del 18 (2026-09-14) added a
+second job, `DockerBuild`, to the same pipeline's `BuildAndTest` stage — it
+builds Del 17's `Dockerfile` on every push/PR (catching the kind of thing
+that quietly rots otherwise, like a stale `COPY` path) without pushing the
+image anywhere; `Deploy` below is unchanged, still publishing straight to
+App Service the way Del 8 set it up. One real snag along the way, worth
+knowing if you ever recreate this pipeline from scratch: the service
+connection name in `azure-pipelines.yml` has to match the name actually
+given to it in Azure DevOps **exactly**, character for character — a stale
+placeholder value here failed the whole `Deploy` stage until corrected (see
+`docs/AZURE_DEPLOYMENT.md` section 5).
 
 ## Authentication & authorization
 
@@ -812,8 +824,16 @@ database.
       Swagger UI at `http://localhost:8080/swagger` (see "[Alternative: run
       everything in Docker](#alternative-run-everything-in-docker-del-17)"
       above). Phase 5 complete.
-- [ ] **Phase 6 — DevOps**: Bicep (Infrastructure as Code) — CI/CD itself
-      already exists as of Del 8, on Azure Pipelines
+- [~] **Phase 6 — DevOps**: Del 18 (CI/CD — a `DockerBuild` job added to
+      `azure-pipelines.yml`'s existing `BuildAndTest` stage, building Del 17's
+      `Dockerfile` on every push/PR to prove it still builds) confirmed
+      working end-to-end against the live pipeline (2026-09-14) — deliberately
+      the minimal version of this Del: the image is built, never pushed, and
+      `Deploy` still publishes to App Service exactly as Del 8 set it up. No
+      Azure Container Registry exists yet, and App Service hasn't switched to
+      Web App for Containers — a deliberate follow-up decision, not something
+      Del 18 needed to make (see `docs/ARCHITECTURE.md`'s Del 18 section).
+      Remaining in this phase: Del 19, Bicep (Infrastructure as Code)
 - [ ] **Phase 7 — Polish**: React frontend, dashboard, demo environment
 
 See the conversation history / project notes for the detailed breakdown of

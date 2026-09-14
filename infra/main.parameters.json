@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "value": "swedencentral"
+    },
+    "stage": {
+      "value": "dev"
+    },
+    "appName": {
+      "value": "projectatlas"
+    },
+    "appServicePlanSkuName": {
+      "value": "F1"
+    },
+    "enableSwaggerUi": {
+      "value": true
+    },
+    "keyVaultName": {
+      "value": "<namnet på ditt befintliga Key Vault — samma värde som KEYVAULT_NAME i docs/AZURE_DEPLOYMENT.md avsnitt 3>"
+    },
+    "keyVaultResourceGroup": {
+      "value": "<resursgruppen ditt Key Vault faktiskt ligger i>"
+    },
+    "sqlServerName": {
+      "value": "<namnet på din befintliga SQL-server, utan .database.windows.net — samma värde som SQL_SERVER_NAME i docs/AZURE_DEPLOYMENT.md avsnitt 7>"
+    },
+    "sqlServerResourceGroup": {
+      "value": "<resursgruppen den SQL-servern faktiskt ligger i — samma värde som SQL_RG i docs/AZURE_DEPLOYMENT.md avsnitt 7>"
+    },
+    "serviceBusResourceGroup": {
+      "value": "<resursgruppen nspl-sb-core-dev-sc faktiskt ligger i — samma värde som SERVICEBUS_RG i docs/AZURE_DEPLOYMENT.md avsnitt 9.1>"
+    },
+    "storageAccountName": {
+      "value": "<ett globalt unikt namn, t.ex. stprojectatlasdevsc — samma värde som STORAGE_ACCOUNT_NAME i docs/AZURE_DEPLOYMENT.md avsnitt 8, bara gemener/siffror, 3-24 tecken>"
+    }
+  }
+}

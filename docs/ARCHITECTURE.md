@@ -1010,6 +1010,67 @@ Once seeded, both attempts corrected, register and login succeeded through
 Swagger UI, completing the first full end-to-end smoke test of the
 containerized stack.
 
+**Del 18 — CI/CD: verifying the Docker image builds on every push.** The
+roadmap line for this Del just says "extend CI/CD with docker build", which
+leaves real room to interpret — anywhere from "prove the Dockerfile still
+builds" up through "push it to a registry and switch App Service to run it
+in production". `docs/AZURE_DEPLOYMENT.md`'s Del 17 section had already
+flagged that range as a deliberately open question rather than something
+Del 17 should decide on its own behalf. Presented with the choice, this Del
+took the smallest, lowest-risk slice of it: a new `DockerBuild` job in
+`azure-pipelines.yml`'s existing `BuildAndTest` stage runs
+`docker build -f src/Atlas.Api/Dockerfile -t projectatlas-api:$(Build.BuildId) .`
+on every push and PR against `main`, and nothing more — no Azure Container
+Registry was provisioned, no image is pushed anywhere, and `Deploy` still
+publishes straight to App Service exactly the way Del 8 set it up. The
+value is the same one a compile step already provides for the C# above it
+in the same stage: it turns Dockerfile bit-rot (a `COPY` path left stale
+after a project rename, a project reference the multi-stage build can no
+longer resolve) into an immediate, loud CI failure instead of something
+only discovered the next time someone actually runs `docker compose up
+--build` by hand. Whether to go further — provision an ACR, push the image,
+and switch App Service to Web App for Containers — is left as a deliberate,
+separate decision for a later Del, not a gap this one failed to close.
+
+`DockerBuild` is its own job, not a step appended to the existing `Build`
+job, on purpose: `src/Atlas.Api/Dockerfile`'s own `build` stage runs a
+completely separate `dotnet restore`/`publish` *inside* the container, from
+source, so it needs none of `Build`'s own dotnet output — giving it a
+separate job lets Azure Pipelines schedule it in parallel with `Build`
+rather than forcing it to wait in line behind it. (Whether that parallelism
+is actually realized depends on how many parallel jobs the Azure DevOps
+org has available — a free-tier org with only one will still run them one
+after another in practice, which is a scheduling detail, not a pipeline
+bug.) Because `DockerBuild` lives inside the `BuildAndTest` stage, a broken
+Dockerfile fails that stage, which — via `Deploy`'s own
+`dependsOn: BuildAndTest` — blocks the App Service deployment too, exactly
+the way a failing `dotnet test` already does, even though nothing about
+`DockerBuild` sits on the App Service deploy's actual critical path. That's
+intentional, not an oversight: a broken Dockerfile is a real regression
+worth gating on. No explicit Docker installation step was needed —
+Azure Pipelines' Microsoft-hosted `ubuntu-latest` pool image ships Docker
+Engine preinstalled.
+
+**Confirmed working end-to-end against the live pipeline on 2026-09-14**,
+though not on the first attempt: the very first run failed at the `Deploy`
+stage — not because of anything `DockerBuild` did (`BuildAndTest` itself
+passed, `DockerBuild` included), but because `azureServiceConnection` in
+`azure-pipelines.yml` still held the generic placeholder value
+(`sc-projectatlas-dev-sc`) `docs/AZURE_DEPLOYMENT.md`'s own Del 8 setup
+instructions had used as an example, while the service connection Peter had
+actually created in Azure DevOps was named `project-atlas-connectionname`.
+Azure Pipelines matches a service connection by name, character for
+character, against whatever `azureServiceConnection` resolves to — there is
+no fuzzy matching, no fallback to "the only Azure Resource Manager
+connection in the project" — so any mismatch here fails `Deploy` outright,
+with an error naming the service connection it couldn't find. This wasn't a
+bug Del 18 introduced; it was a stale value left over from Del 8 that
+nothing had exercised end-to-end until this Del's own pipeline run finally
+forced the question. Corrected in both `azure-pipelines.yml` and
+`docs/AZURE_DEPLOYMENT.md`'s section 5 (which now shows the real name Peter
+uses, rather than an illustrative placeholder), after which both
+`BuildAndTest` (`Build` and `DockerBuild`) and `Deploy` ran green.
+
 ## Current known simplifications (by design)
 
 - Azure SQL (Del 9) reuses Peter's existing SQL login for the moment — the
@@ -1140,3 +1201,20 @@ containerized stack.
   its own yet; that only starts to matter once Del 18 (CI/CD) decides
   whether/where this same `Dockerfile` gets built and pushed in the
   pipeline.
+- Del 18's `DockerBuild` job builds the image and throws it away — nothing
+  persists it, not even as a pipeline artifact. That's consistent with the
+  Del's own deliberately minimal scope (see that Del's section above), but
+  it does mean the image a given commit *would* produce is never actually
+  available anywhere to inspect or run without rebuilding it locally.
+  Publishing it as a pipeline artifact (without going as far as pushing to
+  a real registry) would be a small, natural next step if that becomes
+  useful before the larger ACR/Web-App-for-Containers decision is made.
+- The `azureServiceConnection`/`webAppName` variables at the top of
+  `azure-pipelines.yml` are plain strings checked into source control, with
+  no validation beyond "does a service connection or Web App with this
+  exact name exist" at pipeline-run time — there is no earlier, faster
+  feedback loop (a lint step, a required-variable check) that would catch a
+  stale or mistyped value before `Deploy` actually runs and fails. Del 18's
+  own service-connection mismatch (see that Del's section above) is a live
+  example of exactly this gap; it was caught by running the pipeline, not
+  by anything checking the YAML beforehand.
