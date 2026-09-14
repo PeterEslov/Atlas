@@ -9,6 +9,10 @@
 # plain job (not a "deployment" job against an Environment) to keep this
 # Del's scope to "a pipeline that deploys automatically" — approval gates /
 # Environments are a natural follow-up, not something Del 8 needs.
+#
+# Del 18 added a second job to BuildAndTest, DockerBuild — see its own
+# comment below for why it's a separate job, and why it deliberately only
+# builds the Del 17 image rather than pushing it anywhere.
 
 trigger:
   branches:
@@ -22,7 +26,7 @@ pr:
 
 variables:
   buildConfiguration: 'Release'
-  azureServiceConnection: 'project-atlas-connectionname'   # set to your actual service connection name (docs/AZURE_DEPLOYMENT.md section 5)
+  azureServiceConnection: 'sc-projectatlas-dev-sc'   # set to your actual service connection name (docs/AZURE_DEPLOYMENT.md section 5)
   webAppName: 'app-projectatlas-dev-sc'              # set to your actual Web App name (docs/AZURE_DEPLOYMENT.md section 1)
 
 stages:
@@ -70,6 +74,45 @@ stages:
           - publish: $(Build.ArtifactStagingDirectory)/publish
             displayName: 'Publish build artifact'
             artifact: drop
+
+      # Del 18 — a second job in this stage, not a step tacked onto Build
+      # above: it needs none of Build's dotnet restore/build/test output
+      # (src/Atlas.Api/Dockerfile's own "build" stage does a completely
+      # separate dotnet restore/publish *inside* the container, from source),
+      # so giving it its own job lets Azure Pipelines run it in parallel with
+      # Build rather than serially after it — though on a free-tier Azure
+      # DevOps org with only one paid/free parallel job available, "eligible
+      # to run in parallel" and "actually runs in parallel" aren't the same
+      # thing; the two jobs may still queue one after another in practice.
+      #
+      # Deliberately just docker build, nothing more: this proves the
+      # Dockerfile still builds — catches the kind of thing that silently
+      # rots otherwise, like a COPY path left stale after a project rename,
+      # or a project reference the multi-stage build no longer resolves —
+      # the same value a compile step already gives the C# above it. It does
+      # NOT push the image anywhere: no Azure Container Registry exists for
+      # this project yet, and Deploy below still publishes to App Service
+      # exactly as Del 8 set it up (Oryx build from the dotnet publish
+      # output), unchanged. Whether to provision an ACR, push this image to
+      # it, and switch App Service to Web App for Containers is a deliberate
+      # follow-up decision, not something to fold into this Del — see
+      # docs/AZURE_DEPLOYMENT.md's Del 18 section.
+      #
+      # A failing docker build here fails this stage, which — via Deploy's
+      # own dependsOn: BuildAndTest below — blocks the App Service deploy
+      # too, the same way a failing dotnet test already does. That's
+      # intentional: a broken Dockerfile is a real regression, even though
+      # nothing about it is on the App Service deploy's own critical path.
+      #
+      # No explicit Docker setup task needed: Azure Pipelines' Microsoft-
+      # hosted ubuntu-latest pool image ships Docker Engine preinstalled.
+      - job: DockerBuild
+        displayName: 'Docker build (Del 17 image — verified, not pushed)'
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - script: docker build -f src/Atlas.Api/Dockerfile -t projectatlas-api:$(Build.BuildId) .
+            displayName: 'docker build (Atlas.Api, multi-stage)'
 
   - stage: Deploy
     displayName: 'Deploy to Azure App Service'
