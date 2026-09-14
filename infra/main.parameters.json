@@ -18,22 +18,22 @@
       "value": true
     },
     "keyVaultName": {
-      "value": "<namnet på ditt befintliga Key Vault — samma värde som KEYVAULT_NAME i docs/AZURE_DEPLOYMENT.md avsnitt 3>"
+      "value": "mykeyvaultpeter"
     },
     "keyVaultResourceGroup": {
-      "value": "<resursgruppen ditt Key Vault faktiskt ligger i>"
+      "value": "rg-keyvault-dev-sc"
     },
     "sqlServerName": {
-      "value": "<namnet på din befintliga SQL-server, utan .database.windows.net — samma värde som SQL_SERVER_NAME i docs/AZURE_DEPLOYMENT.md avsnitt 7>"
+      "value": "azuresqlpeter"
     },
     "sqlServerResourceGroup": {
-      "value": "<resursgruppen den SQL-servern faktiskt ligger i — samma värde som SQL_RG i docs/AZURE_DEPLOYMENT.md avsnitt 7>"
+      "value": "rg-dotnetmastery-dev-sc"
     },
     "serviceBusResourceGroup": {
-      "value": "<resursgruppen nspl-sb-core-dev-sc faktiskt ligger i — samma värde som SERVICEBUS_RG i docs/AZURE_DEPLOYMENT.md avsnitt 9.1>"
+      "value": "rg-core-dev-sc"
     },
     "storageAccountName": {
-      "value": "<ett globalt unikt namn, t.ex. stprojectatlasdevsc — samma värde som STORAGE_ACCOUNT_NAME i docs/AZURE_DEPLOYMENT.md avsnitt 8, bara gemener/siffror, 3-24 tecken>"
+      "value": "stprojectatlasdevsc"
     }
   }
 }
