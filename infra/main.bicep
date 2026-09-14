@@ -3,12 +3,30 @@
 // Codifies the Azure environment docs/AZURE_DEPLOYMENT.md built up by hand,
 // one `az` command at a time, across Del 8 through Del 14: the App Service
 // plan and Web App (section 1), the Azure SQL database (section 7), the
-// Blob Storage account (section 8), the role assignments granting the
-// deployed Web App's managed identity access to the existing Key Vault
-// and existing Service Bus namespace (sections 3 and 9.1) — plus the two
-// resources that were, until this Del, only ever a *plan* in that document
-// and never actually provisioned: Application Insights (section 11) and
-// Azure Cache for Redis (section 10).
+// Blob Storage account (section 8), and the role assignment granting the
+// deployed Web App's managed identity access to the existing Service Bus
+// namespace (section 9.1, the one genuinely open cloud point this Del
+// closes) — plus the two resources that were, until this Del, only ever a
+// *plan* in that document and never actually provisioned: Application
+// Insights (section 11) and Redis (section 10, now Azure Managed Redis —
+// see the header comment in modules/redisCache.bicep for why it isn't the
+// classic Azure Cache for Redis section 10 originally described).
+//
+// The Key Vault and Storage role assignments section 3/8.2 already
+// describe are deliberately NOT redeployed here, even though modules for
+// them exist (modules/keyVaultRoleAssignment.bicep,
+// modules/storageRoleAssignment.bicep — kept for reference and for a
+// fresh environment that doesn't have them yet): a first real `az
+// deployment group create` against this template (2026-09-14) failed with
+// `RoleAssignmentExists` for both. Azure refuses a second role assignment
+// for the same (principal, role, scope) triple no matter what the new
+// assignment's own resource name is — so the deterministic-GUID trick
+// that makes a *Bicep-created* role assignment safe to redeploy doesn't
+// help here, because these two were originally created by hand via `az
+// role assignment create` (a different, randomly-named resource) in Del
+// 8/10. Nothing to fix: it's Bicep correctly detecting the work is already
+// done, not a bug — same conceptually as Microsoft.Storage/storageAccounts
+// and Microsoft.Web/serverfarms below showing `Nochange` in a `what-if`.
 //
 // What this deliberately does NOT do:
 //   - Create the resource group. Deploy this at resource-group scope
@@ -17,11 +35,10 @@
 //     which you already created by hand there.
 //   - Create the Key Vault, the SQL logical server, or the Service Bus
 //     namespace — all three are existing resources this template only
-//     references (`existing`) and grants access to. They're shared with
-//     things outside this project (see docs/AZURE_DEPLOYMENT.md sections
-//     3/7/9 for why each is reused rather than provisioned fresh), so
-//     Del 19 only ever adds an RBAC role assignment against them, never
-//     owns their lifecycle.
+//     references (`existing`). They're shared with things outside this
+//     project (see docs/AZURE_DEPLOYMENT.md sections 3/7/9 for why each is
+//     reused rather than provisioned fresh), so Del 19 never owns their
+//     lifecycle.
 //   - Run EF Core migrations, seed data, or set the two secrets that
 //     already exist in Key Vault (`Jwt--SigningKey`,
 //     `ConnectionStrings--AtlasDb`) — Bicep provisions infrastructure, not
@@ -176,13 +193,13 @@ module webApp 'modules/webApp.bicep' = {
   }
 }
 
-module storageRoleAssignment 'modules/storageRoleAssignment.bicep' = {
-  name: 'storageRoleAssignment'
-  params: {
-    storageAccountName: storage.outputs.name
-    principalId: webApp.outputs.principalId
-  }
-}
+// storageRoleAssignment intentionally NOT called here — see the file
+// header comment: this exact role assignment (Storage Blob Data
+// Contributor, this Web App identity, this storage account) already
+// exists from docs/AZURE_DEPLOYMENT.md section 8.2, created by hand in
+// Del 10. The module (modules/storageRoleAssignment.bicep) is still in
+// the repo and still correct Bicep — useful as-is for a fresh environment
+// that doesn't have this assignment yet.
 
 // --- Resources that live in a different resource group, deployed cross-scope ---
 
@@ -198,14 +215,13 @@ module sqlDatabase 'modules/sqlDatabase.bicep' = {
   }
 }
 
-module keyVaultRoleAssignment 'modules/keyVaultRoleAssignment.bicep' = {
-  name: 'keyVaultRoleAssignment'
-  scope: resourceGroup(keyVaultResourceGroup)
-  params: {
-    keyVaultName: keyVaultName
-    principalId: webApp.outputs.principalId
-  }
-}
+// keyVaultRoleAssignment intentionally NOT called here — see the file
+// header comment: this exact role assignment (Key Vault Secrets User,
+// this Web App identity, this vault) already exists from
+// docs/AZURE_DEPLOYMENT.md section 3, created by hand in Del 8. The
+// module (modules/keyVaultRoleAssignment.bicep) is still in the repo and
+// still correct Bicep — useful as-is for a fresh environment that doesn't
+// have this assignment yet.
 
 module serviceBusRoleAssignment 'modules/serviceBusRoleAssignment.bicep' = {
   name: 'serviceBusRoleAssignment'
@@ -237,7 +253,7 @@ module redisSecret 'modules/keyVaultSecret.bicep' = {
   params: {
     keyVaultName: keyVaultName
     secretName: 'Redis--ConnectionString'
-    secretValue: '${redis.outputs.hostName}:${redis.outputs.sslPort},password=${redis.outputs.primaryKey},ssl=True,abortConnect=False'
+    secretValue: '${redis.outputs.hostName}:${redis.outputs.port},password=${redis.outputs.primaryKey},ssl=True,abortConnect=False'
   }
 }
 

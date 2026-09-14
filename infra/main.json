@@ -1,0 +1,928 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.47.16.16243",
+      "templateHash": "8474284863534101221"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "swedencentral",
+      "metadata": {
+        "description": "Azure region for every resource this template creates."
+      }
+    },
+    "stage": {
+      "type": "string",
+      "defaultValue": "dev",
+      "allowedValues": [
+        "dev"
+      ],
+      "metadata": {
+        "description": "Environment/stage suffix used throughout the naming convention <type>-<app>-<stage>-sc."
+      }
+    },
+    "appName": {
+      "type": "string",
+      "defaultValue": "projectatlas",
+      "metadata": {
+        "description": "Short app name used throughout the naming convention."
+      }
+    },
+    "appServicePlanSkuName": {
+      "type": "string",
+      "defaultValue": "F1",
+      "metadata": {
+        "description": "App Service plan SKU. F1 (free) where available, B1 otherwise — see docs/AZURE_DEPLOYMENT.md section 1."
+      }
+    },
+    "webAppName": {
+      "type": "string",
+      "defaultValue": "[format('app-{0}-{1}-sc', parameters('appName'), parameters('stage'))]",
+      "metadata": {
+        "description": "Web App name. Globally unique — becomes <name>.azurewebsites.net."
+      }
+    },
+    "enableSwaggerUi": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Enable the Swagger UI surface on the deployed API — see the EnableSwaggerUi comment in Program.cs."
+      }
+    },
+    "webAppAlwaysOn": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Keep the Web App loaded instead of unloading it after 20 minutes idle. Defaults to false — Azure's Free (F1) tier does not support Always On at all; see the alwaysOn comment in modules/webApp.bicep. Only set true once appServicePlanSkuName is B1 or higher."
+      }
+    },
+    "keyVaultName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the existing Key Vault Atlas.Api reads secrets from (docs/AZURE_DEPLOYMENT.md section 3). No default — this is your own pre-existing vault."
+      }
+    },
+    "keyVaultResourceGroup": {
+      "type": "string",
+      "metadata": {
+        "description": "Resource group the existing Key Vault lives in."
+      }
+    },
+    "sqlServerName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the existing Azure SQL logical server, without .database.windows.net (docs/AZURE_DEPLOYMENT.md section 7). No default — this is your own pre-existing server."
+      }
+    },
+    "sqlServerResourceGroup": {
+      "type": "string",
+      "metadata": {
+        "description": "Resource group the existing SQL server lives in."
+      }
+    },
+    "sqlDatabaseName": {
+      "type": "string",
+      "defaultValue": "[format('sqldb-{0}-{1}-sc', parameters('appName'), parameters('stage'))]",
+      "metadata": {
+        "description": "Name of the new Atlas database to create on that server."
+      }
+    },
+    "sqlDatabaseSkuName": {
+      "type": "string",
+      "defaultValue": "GP_S_Gen5_2",
+      "metadata": {
+        "description": "Serverless SKU for the SQL database — GP_S_Gen5_2 is Gen5, max 2 vCores (docs/AZURE_DEPLOYMENT.md section 7.1)."
+      }
+    },
+    "sqlUseFreeLimit": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Use Azure's monthly free SQL limit. Only one database per subscription can claim it — set false if another database already does."
+      }
+    },
+    "serviceBusNamespaceName": {
+      "type": "string",
+      "defaultValue": "nspl-sb-core-dev-sc",
+      "metadata": {
+        "description": "Name of the existing Service Bus namespace used for TicketAssigned events (docs/AZURE_DEPLOYMENT.md section 9). Defaults to the namespace local development already points at."
+      }
+    },
+    "serviceBusResourceGroup": {
+      "type": "string",
+      "metadata": {
+        "description": "Resource group the existing Service Bus namespace lives in."
+      }
+    },
+    "storageAccountName": {
+      "type": "string",
+      "metadata": {
+        "description": "Globally unique storage account name for ticket attachments — lowercase letters/digits only, 3-24 chars (docs/AZURE_DEPLOYMENT.md section 8.1). No default: pick your own and check availability."
+      }
+    },
+    "redisName": {
+      "type": "string",
+      "defaultValue": "[format('redis-{0}-{1}-sc', parameters('appName'), parameters('stage'))]",
+      "metadata": {
+        "description": "Redis cache name. Globally unique — check availability before relying on the default."
+      }
+    },
+    "appInsightsName": {
+      "type": "string",
+      "defaultValue": "[format('appi-{0}-{1}-sc', parameters('appName'), parameters('stage'))]",
+      "metadata": {
+        "description": "Application Insights component name."
+      }
+    },
+    "logAnalyticsWorkspaceName": {
+      "type": "string",
+      "defaultValue": "[format('la-{0}-{1}-sc', parameters('appName'), parameters('stage'))]",
+      "metadata": {
+        "description": "Log Analytics workspace backing Application Insights."
+      }
+    }
+  },
+  "variables": {
+    "appServicePlanName": "[format('plan-{0}-{1}-sc', parameters('appName'), parameters('stage'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "appServicePlan",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "name": {
+            "value": "[variables('appServicePlanName')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "skuName": {
+            "value": "[parameters('appServicePlanSkuName')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "16657284849371994223"
+            }
+          },
+          "parameters": {
+            "name": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the App Service plan."
+              }
+            },
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region for the plan."
+              }
+            },
+            "skuName": {
+              "type": "string",
+              "defaultValue": "F1",
+              "metadata": {
+                "description": "SKU name, e.g. F1 (free) or B1 (basic, ~$13/month). F1 may not be available in every region."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Web/serverfarms",
+              "apiVersion": "2023-01-01",
+              "name": "[parameters('name')]",
+              "location": "[parameters('location')]",
+              "sku": {
+                "name": "[parameters('skuName')]"
+              },
+              "kind": "linux",
+              "properties": {
+                "reserved": true
+              }
+            }
+          ],
+          "outputs": {
+            "id": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Web/serverfarms', parameters('name'))]"
+            },
+            "name": {
+              "type": "string",
+              "value": "[parameters('name')]"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "appInsights",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "appInsightsName": {
+            "value": "[parameters('appInsightsName')]"
+          },
+          "logAnalyticsWorkspaceName": {
+            "value": "[parameters('logAnalyticsWorkspaceName')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "13332495413985239093"
+            }
+          },
+          "parameters": {
+            "appInsightsName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the Application Insights component."
+              }
+            },
+            "logAnalyticsWorkspaceName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the Log Analytics workspace backing it."
+              }
+            },
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region for both resources."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.OperationalInsights/workspaces",
+              "apiVersion": "2022-10-01",
+              "name": "[parameters('logAnalyticsWorkspaceName')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "sku": {
+                  "name": "PerGB2018"
+                },
+                "retentionInDays": 30
+              }
+            },
+            {
+              "type": "Microsoft.Insights/components",
+              "apiVersion": "2020-02-02",
+              "name": "[parameters('appInsightsName')]",
+              "location": "[parameters('location')]",
+              "kind": "web",
+              "properties": {
+                "Application_Type": "web",
+                "WorkspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('logAnalyticsWorkspaceName'))]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('logAnalyticsWorkspaceName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "connectionString": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Insights/components', parameters('appInsightsName')), '2020-02-02').ConnectionString]"
+            },
+            "name": {
+              "type": "string",
+              "value": "[parameters('appInsightsName')]"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "storage",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "name": {
+            "value": "[parameters('storageAccountName')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "3038901248855986840"
+            }
+          },
+          "parameters": {
+            "name": {
+              "type": "string",
+              "metadata": {
+                "description": "Globally unique storage account name (lowercase letters/digits only, 3-24 chars)."
+              }
+            },
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region for the storage account."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Storage/storageAccounts",
+              "apiVersion": "2023-01-01",
+              "name": "[parameters('name')]",
+              "location": "[parameters('location')]",
+              "kind": "StorageV2",
+              "sku": {
+                "name": "Standard_LRS"
+              },
+              "properties": {
+                "allowBlobPublicAccess": false,
+                "minimumTlsVersion": "TLS1_2",
+                "supportsHttpsTrafficOnly": true
+              }
+            }
+          ],
+          "outputs": {
+            "name": {
+              "type": "string",
+              "value": "[parameters('name')]"
+            },
+            "id": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Storage/storageAccounts', parameters('name'))]"
+            },
+            "blobEndpoint": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Storage/storageAccounts', parameters('name')), '2023-01-01').primaryEndpoints.blob]"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "redis",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "name": {
+            "value": "[parameters('redisName')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "1347401816469476036"
+            }
+          },
+          "parameters": {
+            "name": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the Redis Enterprise cluster. Must be globally unique."
+              }
+            },
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region for the cache."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Cache/redisEnterprise",
+              "apiVersion": "2024-05-01-preview",
+              "name": "[parameters('name')]",
+              "location": "[parameters('location')]",
+              "sku": {
+                "name": "Balanced_B0"
+              },
+              "identity": {
+                "type": "None"
+              },
+              "properties": {
+                "minimumTlsVersion": "1.2"
+              }
+            },
+            {
+              "type": "Microsoft.Cache/redisEnterprise/databases",
+              "apiVersion": "2024-05-01-preview",
+              "name": "[format('{0}/{1}', parameters('name'), 'default')]",
+              "properties": {
+                "clientProtocol": "Encrypted",
+                "port": 10000,
+                "clusteringPolicy": "OSSCluster",
+                "evictionPolicy": "NoEviction",
+                "persistence": {
+                  "aofEnabled": false,
+                  "rdbEnabled": false
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Cache/redisEnterprise', parameters('name'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "hostName": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Cache/redisEnterprise', parameters('name')), '2024-05-01-preview').hostName]"
+            },
+            "port": {
+              "type": "int",
+              "value": 10000
+            },
+            "primaryKey": {
+              "type": "string",
+              "value": "[listKeys(resourceId('Microsoft.Cache/redisEnterprise/databases', parameters('name'), 'default'), '2024-05-01-preview').primaryKey]"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "webApp",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "name": {
+            "value": "[parameters('webAppName')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "appServicePlanId": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'appServicePlan'), '2025-04-01').outputs.id.value]"
+          },
+          "keyVaultName": {
+            "value": "[parameters('keyVaultName')]"
+          },
+          "blobStorageAccountUrl": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'storage'), '2025-04-01').outputs.blobEndpoint.value]"
+          },
+          "serviceBusNamespaceHostname": {
+            "value": "[format('{0}.servicebus.windows.net', parameters('serviceBusNamespaceName'))]"
+          },
+          "appInsightsConnectionString": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'appInsights'), '2025-04-01').outputs.connectionString.value]"
+          },
+          "enableSwaggerUi": {
+            "value": "[parameters('enableSwaggerUi')]"
+          },
+          "alwaysOn": {
+            "value": "[parameters('webAppAlwaysOn')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "1736390318449470452"
+            }
+          },
+          "parameters": {
+            "name": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the Web App. Must be globally unique (part of <name>.azurewebsites.net)."
+              }
+            },
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region for the Web App."
+              }
+            },
+            "appServicePlanId": {
+              "type": "string",
+              "metadata": {
+                "description": "Resource ID of the App Service plan to run on."
+              }
+            },
+            "keyVaultName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the existing Key Vault Atlas.Api reads secrets from."
+              }
+            },
+            "blobStorageAccountUrl": {
+              "type": "string",
+              "metadata": {
+                "description": "Fully qualified hostname of the Blob Storage account for attachments."
+              }
+            },
+            "serviceBusNamespaceHostname": {
+              "type": "string",
+              "metadata": {
+                "description": "Fully qualified namespace hostname of the Service Bus namespace used for TicketAssigned events."
+              }
+            },
+            "appInsightsConnectionString": {
+              "type": "string",
+              "metadata": {
+                "description": "Application Insights connection string. Empty disables the Serilog sink (see Program.cs)."
+              }
+            },
+            "enableSwaggerUi": {
+              "type": "bool",
+              "defaultValue": true,
+              "metadata": {
+                "description": "Enable the Swagger UI surface. A deliberate demo-project choice — see the EnableSwaggerUi comment in Program.cs."
+              }
+            },
+            "alwaysOn": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "Keep the app loaded instead of unloading it after 20 minutes idle. Defaults to false because Azure's Free (F1) tier — this project's default App Service plan SKU, see appServicePlan.bicep — does not support Always On at all; a `create` with this true on F1 fails outright. Only set true once running on Basic (B1) or higher, where it's worth the (small) cost to avoid cold starts."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Web/sites",
+              "apiVersion": "2023-01-01",
+              "name": "[parameters('name')]",
+              "location": "[parameters('location')]",
+              "identity": {
+                "type": "SystemAssigned"
+              },
+              "properties": {
+                "serverFarmId": "[parameters('appServicePlanId')]",
+                "httpsOnly": true,
+                "siteConfig": {
+                  "linuxFxVersion": "DOTNETCORE|10.0",
+                  "alwaysOn": "[parameters('alwaysOn')]",
+                  "appSettings": [
+                    {
+                      "name": "Jwt__Issuer",
+                      "value": "ProjectAtlas"
+                    },
+                    {
+                      "name": "Jwt__Audience",
+                      "value": "ProjectAtlas.Api"
+                    },
+                    {
+                      "name": "Jwt__ExpiryMinutes",
+                      "value": "60"
+                    },
+                    {
+                      "name": "EnableSwaggerUi",
+                      "value": "[string(parameters('enableSwaggerUi'))]"
+                    },
+                    {
+                      "name": "KeyVault__Name",
+                      "value": "[parameters('keyVaultName')]"
+                    },
+                    {
+                      "name": "BlobStorage__AccountUrl",
+                      "value": "[parameters('blobStorageAccountUrl')]"
+                    },
+                    {
+                      "name": "ServiceBus__FullyQualifiedNamespace",
+                      "value": "[parameters('serviceBusNamespaceHostname')]"
+                    },
+                    {
+                      "name": "ApplicationInsights__ConnectionString",
+                      "value": "[parameters('appInsightsConnectionString')]"
+                    }
+                  ]
+                }
+              }
+            }
+          ],
+          "outputs": {
+            "name": {
+              "type": "string",
+              "value": "[parameters('name')]"
+            },
+            "principalId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Web/sites', parameters('name')), '2023-01-01', 'full').identity.principalId]"
+            },
+            "defaultHostName": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Web/sites', parameters('name')), '2023-01-01').defaultHostName]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'appInsights')]",
+        "[resourceId('Microsoft.Resources/deployments', 'appServicePlan')]",
+        "[resourceId('Microsoft.Resources/deployments', 'storage')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "sqlDatabase",
+      "resourceGroup": "[parameters('sqlServerResourceGroup')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "sqlServerName": {
+            "value": "[parameters('sqlServerName')]"
+          },
+          "databaseName": {
+            "value": "[parameters('sqlDatabaseName')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "skuName": {
+            "value": "[parameters('sqlDatabaseSkuName')]"
+          },
+          "useFreeLimit": {
+            "value": "[parameters('sqlUseFreeLimit')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "16249468895759568117"
+            }
+          },
+          "parameters": {
+            "sqlServerName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the existing Azure SQL logical server (without .database.windows.net)."
+              }
+            },
+            "databaseName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the new database to create on that server."
+              }
+            },
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region — should match the existing server's region."
+              }
+            },
+            "skuName": {
+              "type": "string",
+              "defaultValue": "GP_S_Gen5_2",
+              "metadata": {
+                "description": "Serverless General Purpose SKU name, e.g. GP_S_Gen5_2 (Gen5, max 2 vCores)."
+              }
+            },
+            "useFreeLimit": {
+              "type": "bool",
+              "defaultValue": true,
+              "metadata": {
+                "description": "Use Azure's free monthly limit (100,000 vCore-seconds, 32 GB storage). Only one database per subscription can use it — set to false if another database already claims it."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Sql/servers/databases",
+              "apiVersion": "2023-05-01-preview",
+              "name": "[format('{0}/{1}', parameters('sqlServerName'), parameters('databaseName'))]",
+              "location": "[parameters('location')]",
+              "sku": {
+                "name": "[parameters('skuName')]",
+                "tier": "GeneralPurpose"
+              },
+              "properties": {
+                "autoPauseDelay": 60,
+                "useFreeLimit": "[parameters('useFreeLimit')]",
+                "freeLimitExhaustionBehavior": "AutoPause"
+              }
+            }
+          ],
+          "outputs": {
+            "name": {
+              "type": "string",
+              "value": "[parameters('databaseName')]"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "serviceBusRoleAssignment",
+      "resourceGroup": "[parameters('serviceBusResourceGroup')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "serviceBusNamespaceName": {
+            "value": "[parameters('serviceBusNamespaceName')]"
+          },
+          "principalId": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'webApp'), '2025-04-01').outputs.principalId.value]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "3427167687632647047"
+            }
+          },
+          "parameters": {
+            "serviceBusNamespaceName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the existing Service Bus namespace."
+              }
+            },
+            "principalId": {
+              "type": "string",
+              "metadata": {
+                "description": "principalId of the identity to grant Send access to (the Web App's managed identity)."
+              }
+            }
+          },
+          "variables": {
+            "serviceBusDataSenderRoleId": "69a216fc-b8fb-44d8-bc22-1f3c2cd27a39"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.ServiceBus/namespaces', parameters('serviceBusNamespaceName'))]",
+              "name": "[guid(resourceId('Microsoft.ServiceBus/namespaces', parameters('serviceBusNamespaceName')), parameters('principalId'), variables('serviceBusDataSenderRoleId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('serviceBusDataSenderRoleId'))]",
+                "principalId": "[parameters('principalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'webApp')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "redisSecret",
+      "resourceGroup": "[parameters('keyVaultResourceGroup')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "keyVaultName": {
+            "value": "[parameters('keyVaultName')]"
+          },
+          "secretName": {
+            "value": "Redis--ConnectionString"
+          },
+          "secretValue": {
+            "value": "[format('{0}:{1},password={2},ssl=True,abortConnect=False', reference(resourceId('Microsoft.Resources/deployments', 'redis'), '2025-04-01').outputs.hostName.value, reference(resourceId('Microsoft.Resources/deployments', 'redis'), '2025-04-01').outputs.port.value, reference(resourceId('Microsoft.Resources/deployments', 'redis'), '2025-04-01').outputs.primaryKey.value)]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "3751341615547243658"
+            }
+          },
+          "parameters": {
+            "keyVaultName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the existing Key Vault."
+              }
+            },
+            "secretName": {
+              "type": "string",
+              "metadata": {
+                "description": "Secret name. Key Vault secret names may only contain letters, digits and hyphens — use '--' where the app config key has a ':' (see docs/AZURE_DEPLOYMENT.md section 3)."
+              }
+            },
+            "secretValue": {
+              "type": "securestring",
+              "metadata": {
+                "description": "Secret value."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2023-07-01",
+              "name": "[format('{0}/{1}', parameters('keyVaultName'), parameters('secretName'))]",
+              "properties": {
+                "value": "[parameters('secretValue')]"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'redis')]"
+      ]
+    }
+  ],
+  "outputs": {
+    "webAppName": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'webApp'), '2025-04-01').outputs.name.value]"
+    },
+    "webAppDefaultHostName": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'webApp'), '2025-04-01').outputs.defaultHostName.value]"
+    },
+    "sqlDatabaseName": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('sqlServerResourceGroup')), 'Microsoft.Resources/deployments', 'sqlDatabase'), '2025-04-01').outputs.name.value]"
+    },
+    "storageAccountName": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'storage'), '2025-04-01').outputs.name.value]"
+    },
+    "appInsightsName": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'appInsights'), '2025-04-01').outputs.name.value]"
+    },
+    "redisHostName": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'redis'), '2025-04-01').outputs.hostName.value]"
+    }
+  }
+}
