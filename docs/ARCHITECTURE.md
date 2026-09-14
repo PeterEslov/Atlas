@@ -890,6 +890,126 @@ tests/Atlas.Api.IntegrationTests --filter "Category=Integration"` — all 19
 integration tests passing against a real `AtlasDb_Test` LocalDB database,
 Azurite, a local Redis container, and `az login`.
 
+**Del 17 — Docker containerization: a multi-stage `Dockerfile` for
+`Atlas.Api`, and `docker-compose.yml` running the whole local stack in
+containers.** Scoped the same way Del 14 and Del 16 were — `Atlas.Api` only,
+not `Atlas.Worker` — for the same reason: this is the piece with a
+meaningful surface to containerize (a real HTTP host, real dependencies on
+SQL Server/Redis/Azurite), and adding a second Dockerfile for `Atlas.Worker`
+later is additive, not a rework of this one.
+
+`src/Atlas.Api/Dockerfile` is two stages, not one, and the split is the
+whole point: a `build` stage on the full 800 MB `dotnet/sdk:10.0` image
+compiles and publishes the solution, then a `final` stage on the much
+smaller ~220 MB `dotnet/aspnet:10.0` *runtime* image copies in only the
+published output. The SDK, the source tree, NuGet's package cache and every
+intermediate `obj`/`bin` file never exist in the image that actually ships —
+`docker build` needs the SDK stage to run somewhere, but Docker discards it
+once `final` is built. The build context has to be the repository root, not
+`src/Atlas.Api/` itself, because `Atlas.Api.csproj`'s `ProjectReference`
+entries reach outside that folder (to `Atlas.Application` and
+`Atlas.Infrastructure`, transitively `Atlas.Domain`) — `docker build` can
+only `COPY` files that live inside its context. `docker-compose.yml` sets
+`context: .` / `dockerfile: src/Atlas.Api/Dockerfile` for exactly this
+reason. Copying just the `.csproj`/`.sln` files first, running
+`dotnet restore`, and only then copying the rest of the source is a
+deliberate Docker layer-caching trick: as long as no project reference
+changes, the slow `dotnet restore` step is served from cache on every
+rebuild, even after editing a hundred `.cs` files. `USER app` runs the
+container as the aspnet base image's own built-in non-root user rather than
+root; `ENTRYPOINT ["dotnet", "Atlas.Api.dll"]` (array form, not shell form)
+runs `dotnet` directly as PID 1 so it receives `SIGTERM` directly on
+`docker stop`/`docker compose down`, which is what lets `Program.cs`'s
+`finally { await Log.CloseAndFlushAsync(); }` actually flush before the
+container exits — a shell-form entrypoint would wrap `dotnet` in `/bin/sh
+-c "..."`, which swallows that signal and forces a slower, harder kill.
+
+`docker-compose.yml` adds three supporting containers Peter's machine
+previously ran directly (LocalDB, a Redis container already run this way
+since Del 13, Azurite via `npm install -g azurite` since Del 10) — a real
+`mcr.microsoft.com/mssql/server:2022-latest`, a bare `redis` image, and the
+official `mcr.microsoft.com/azure-storage/azurite` image — each reachable
+from `api` by Compose service name over one Compose-managed network
+(`sqlserver`, `redis`, `azurite` — see `src/Atlas.Api/appsettings.Docker.json`,
+a third environment alongside Development and Testing, since none of
+Development's hostnames — `(localdb)\mssqllocaldb`, `localhost:6379`,
+Azurite's default `127.0.0.1` endpoint — resolve from inside another
+container the way they do from a process on the host). Each supporting
+container has a `healthcheck`, and `api`'s `depends_on` uses
+`condition: service_healthy`, not just `service_started` — SQL Server in
+particular takes 15–30+ seconds to actually accept a connection after the
+container process starts, comfortably longer than `AddPersistence`'s
+`EnableRetryOnFailure` (3 retries, up to 5s apart) reliably covers on its
+own. `Program.cs`'s auto-migrate-on-startup block, previously
+`if (app.Environment.IsDevelopment())`, now also runs for
+`IsEnvironment("Docker")` — the same "fresh, disposable, local-only SQL
+Server, nothing worth protecting" trust level Development already has, and
+neither name is ever what a real Azure App Service deployment runs under.
+
+**Confirmed working end-to-end locally on 2026-09-14**: `docker compose up
+--build` builds the image (22 BuildKit steps), starts all four containers,
+and — after two expected, self-healing transient `Login failed for user
+'sa'` errors (SQL Server's own password-policy initialization racing the
+healthcheck probe, then `api`'s first connection attempt, both while SQL
+Server was still finishing its first-boot startup work) — successfully
+creates and migrates the containerized `AtlasDb` from scratch, all 14
+tables and both migration-history rows included. `Atlas.Api` starts under
+`Hosting environment: Docker` and serves Swagger UI at
+`http://localhost:8080/swagger`.
+
+The first real request through it, `POST /api/auth/register`, failed —
+twice, with two different, genuinely different causes, worth recording
+separately since they're easy to conflate:
+
+- First attempt: a `400` (its response body wasn't captured before the
+  request changed, so the exact field is unconfirmed) — `RegisterRequest`
+  has no explicit `[Required]` attributes of its own, so the two live
+  possibilities for a bare `ValidationProblemDetails` here are ASP.NET
+  Core's implicit-required behavior for non-nullable reference type
+  properties (`FullName`/`Email`/`Password`) when a field is missing or
+  `null` in the JSON body, or a JSON conversion failure — e.g. an
+  unparseable `OrganizationId` GUID, or a `Role` value outside `UserRole`'s
+  0–3 range, since no `JsonStringEnumConverter` is registered and Swagger
+  UI's Role field is therefore numeric, not the role's name.
+- Second attempt: a genuine `500`, `"An unexpected error occurred"` —
+  `ExceptionHandlingMiddleware` only has four `catch` branches
+  (`DomainException`→400, `NotFoundException`→404,
+  `AuthenticationException`→401, catch-all `Exception`→500), and
+  `AuthService.RegisterAsync` never checks that `OrganizationId` actually
+  refers to a real row before calling `User.Create(...)` and
+  `SaveChangesAsync()` — so an `OrganizationId` with no matching
+  `Organizations` row throws a `DbUpdateException` (a real FK violation,
+  `FK_Users_Organizations_OrganizationId`) that isn't any of the three typed
+  exceptions the middleware specifically handles, and falls through to the
+  generic 500. This turned out to be the exact same bootstrapping
+  chicken-and-egg problem README.md's "[8. Try it](../README.md#8-try-it)"
+  section already documents for a plain `dotnet run` — a brand-new database
+  has zero organizations, so there is no valid `organizationId` to register
+  against until `sql/002_SeedData.sql` (or one hand-inserted row) runs —
+  except the containerized `AtlasDb` starts every bit as empty as a fresh
+  LocalDB would, and nothing in `docker-compose.yml`/`Dockerfile`/
+  `appsettings.Docker.json` seeds it automatically. Loading the seed script
+  into a running container needs `docker compose cp` (the file isn't inside
+  the SQL Server image) followed by `docker compose exec sqlserver
+  /opt/mssql-tools18/bin/sqlcmd ...` — see README.md's new "[Alternative: run
+  everything in Docker](../README.md#alternative-run-everything-in-docker-del-17)"
+  section for the exact commands.
+
+One more environment-specific snag surfaced while running those `docker
+compose exec` commands from Git Bash (MINGW64) on Windows: Git Bash's own
+MSYS2 layer automatically rewrites any argument that looks like a Unix
+absolute path (`/opt/mssql-tools18/bin/sqlcmd`) into a Windows path
+(`C:/Program Files/Git/opt/...`) before Docker ever sees it, which fails
+with a confusing "no such file or directory" that has nothing to do with
+SQL Server or the container's actual contents. `MSYS_NO_PATHCONV=1` prefixed
+onto the command disables that rewrite for the one invocation. This is a
+Git-Bash-on-Windows quirk, not a Docker or Compose issue — a `bash`/`zsh`
+shell on Linux or macOS, or PowerShell, never hits it.
+
+Once seeded, both attempts corrected, register and login succeeded through
+Swagger UI, completing the first full end-to-end smoke test of the
+containerized stack.
+
 ## Current known simplifications (by design)
 
 - Azure SQL (Del 9) reuses Peter's existing SQL login for the moment — the
@@ -995,3 +1115,28 @@ Azurite, a local Redis container, and `az login`.
   just correct the Swagger attribute to match what the API already does)
   and this project would rather make that call deliberately, later, than as
   a rushed one-line change while writing an unrelated test.
+- `AuthService.RegisterAsync` still doesn't validate that `OrganizationId`
+  refers to a real `Organizations` row before saving — Del 17's own
+  containerized-stack testing hit exactly this gap (see that Del's section
+  above), the same way a fresh LocalDB always has. Left unfixed for the same
+  reason as the point above: turning that FK violation into a proper
+  `DomainException`/400 is a deliberate, separate change to
+  `ExceptionHandlingMiddleware`'s and/or `AuthService`'s error handling, not
+  something to slip in while writing Docker infrastructure.
+- Docker Compose's `docker-compose.yml` has no automated seeding step of its
+  own — the same "run `sql/002_SeedData.sql` by hand once" bootstrapping
+  step README.md's "Try it" section has always documented for a plain
+  `dotnet run` applies equally to the containerized stack, just via
+  `docker compose cp` + `docker compose exec sqlserver sqlcmd` instead of a
+  direct `sqlcmd -S "(localdb)\mssqllocaldb"` call. A future Del could add
+  this as an init container or a compose `depends_on` step, but that's a
+  bigger design decision (does every `docker compose up` reseed, or only an
+  explicitly empty database?) than Del 17 tried to make.
+- `appsettings.Docker.json` reuses the same JWT signing key and Azure
+  Service Bus namespace `appsettings.Development.json` already commits —
+  deliberately, since the containerized stack is exactly as disposable and
+  local-only as a plain `dotnet run` is, not a step toward a real
+  deployment. The image `docker-compose.yml` builds has no path to Azure of
+  its own yet; that only starts to matter once Del 18 (CI/CD) decides
+  whether/where this same `Dockerfile` gets built and pushed in the
+  pipeline.

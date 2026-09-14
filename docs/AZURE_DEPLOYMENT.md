@@ -276,7 +276,7 @@ steget nedan misslyckas med ett behörighetsfel är det nästan alltid det här.
    det här ena projektets resurser, inte hela prenumerationen. Välj din
    prenumeration (`PetersSubscriptionForTest`) och resursgrupp
    (`$RG`, dvs. `rg-projectatlas-dev-sc`).
-3. Ge den ett namn du känner igen, t.ex. `project-atlas-connectionname`, och spara.
+3. Ge den ett namn du känner igen, t.ex. `sc-projectatlas-dev-sc`, och spara.
    Det namnet är det enda pipelinen behöver referera till — Azure DevOps
    lagrar och hanterar App Registration, service principal *och* det
    federerade förtroendet bakom den namngivna service connection-posten. Inga
@@ -293,7 +293,7 @@ och sätt den till exakt det namn du valde:
 
 ```yaml
 variables:
-  azureServiceConnection: 'project-atlas-connectionname'   # namnet från steg 3
+  azureServiceConnection: 'sc-projectatlas-dev-sc'   # namnet från steg 3
   webAppName: 'app-projectatlas-dev-sc'
 ```
 
@@ -908,4 +908,37 @@ Fas 4:s och Fas 5:s öppna molnpunkter är därför exakt desamma som innan Del
 16: *var* `Atlas.Worker` ska köras i Azure, en riktig Azure Cache for
 Redis-instans, och en riktig Application Insights-resurs (avsnitt 9–11
 ovan). Fas 5:s enda kvarvarande *kod*-punkt, i motsats till dess öppna
-*molnpunkt*, är nu bara Del 17 (Docker) — se README.md:s Roadmap.
+*molnpunkt*, var Del 17 (Docker) — se nästa avsnitt.
+
+## Del 17: Docker — inget nytt avsnitt behövs här
+
+Del 17 (`src/Atlas.Api/Dockerfile` + `docker-compose.yml`, se
+`docs/ARCHITECTURE.md`s Del 17-avsnitt) är klar och bekräftad fungerande
+end-to-end lokalt (2026-09-14) — men den får medvetet **inget eget
+numrerat avsnitt här**, av samma grundskäl som Del 16 ovan: Del 17 rör sig
+aldrig i närheten av Azure. `docker-compose.yml` startar sin egen
+SQL Server-, Redis- och Azurite-container lokalt, exakt som steg 2/5/6 i
+README.md:s "Getting started" redan gjorde en och en — det är samma
+utvecklarmaskin, bara paketerad annorlunda. Inget nytt att provisionera,
+ingen ny Key Vault-hemlighet, ingen ny managed-identity-roll.
+
+Värt att vara tydlig med, eftersom det *låter* som ett driftsättningssteg:
+en `Dockerfile` är i sig bara en byggritning, inte en Azure-resurs. Den
+containeriserade avbildningen `docker compose up --build` bygger lokalt
+körs aldrig i Azure av Del 17 — App Service (avsnitt 1–3 ovan) fortsätter
+köra `Atlas.Api` precis som förut, direkt på Kudu/Oryx-plattformen, inte
+via den här `Dockerfile`n. Den kopplingen kommer först med Del 18 (CI/CD):
+frågan då blir om `azure-pipelines.yml` ska bygga *den här* `Dockerfile`n
+och pusha resultatet till ett Azure Container Registry, och om App Service
+i så fall byter från Oryx-baserad driftsättning till "Web App for
+Containers" — ett medvetet öppet vägval, inte en brist i Del 17. Del 17:s
+enda jobb var att bevisa att `Dockerfile`n och `docker-compose.yml` faktiskt
+fungerar som en lokal utvecklarupplevelse; om/hur den återanvänds i Azure är
+Del 18:s fråga att svara på.
+
+Fas 5 är därmed helt klar (Del 14, Del 16 och Del 17, alla bekräftade
+fungerande end-to-end lokalt) — se README.md:s Roadmap. Fas 4:s och Fas 3:s
+öppna molnpunkter är oförändrade av Del 17: *var* `Atlas.Worker` ska köras i
+Azure, en riktig Azure Cache for Redis-instans, en riktig Application
+Insights-resurs, och Del 20:s Key Vault-generalisering (avsnitt 9–11 och
+punkten om Fas 3 ovan).

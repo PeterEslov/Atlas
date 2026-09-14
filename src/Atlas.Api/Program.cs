@@ -290,11 +290,19 @@ try
         app.UseSwaggerUI(options => options.SwaggerEndpoint("/openapi/v1.json", "Project Atlas API v1"));
     }
 
-    if (app.Environment.IsDevelopment())
+    // Convenience only: applies pending EF Core migrations automatically on
+    // startup so a fresh clone works with just `dotnet run` — or, since
+    // Del 17, `docker compose up`. Extended to the "Docker" environment
+    // (docker-compose.yml sets ASPNETCORE_ENVIRONMENT=Docker) alongside
+    // "Development" because they carry exactly the same trust level: both
+    // point at a fresh, disposable, local-only SQL Server (LocalDB or
+    // docker-compose's own sqlserver container) with nothing worth
+    // protecting, never a stand-in for a real cloud database. Never do this
+    // against Azure SQL in production — deploy migrations explicitly
+    // (Del 8/18) — because neither environment name is ever what a real
+    // Azure App Service deployment runs under.
+    if (app.Environment.IsDevelopment() || app.Environment.IsEnvironment("Docker"))
     {
-        // Convenience only: applies pending EF Core migrations automatically on
-        // startup so a fresh clone works with just `dotnet run`. Never do this
-        // against Azure SQL in production — deploy migrations explicitly (Del 8/18).
         using var scope = app.Services.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<AtlasDbContext>();
         await dbContext.Database.MigrateAsync();

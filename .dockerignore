@@ -1,0 +1,41 @@
+# Del 17 — keeps the `docker build` context small and, more importantly,
+# keeps host-built artifacts out of the image entirely: a bin/obj folder
+# built on Peter's Windows machine contains Windows-specific intermediate
+# files that would either be dead weight or actively wrong inside the
+# Linux build stage (src/Atlas.Api/Dockerfile restores and rebuilds
+# everything from source anyway, so none of this is ever needed).
+
+## .NET build output — rebuilt fresh inside the "build" stage every time
+**/bin/
+**/obj/
+**/out/
+
+## IDE / tooling
+.vs/
+.idea/
+**/*.user
+
+## Git and CI metadata — irrelevant inside the image
+.git/
+.github/
+azure-pipelines.yml
+
+## Test projects — never shipped in the runtime image; Atlas.Api.csproj
+## doesn't reference them, but there's no reason to even copy them into the
+## build context
+tests/
+
+## Documentation and generated docs — same reasoning as tests/
+docs/
+README.md
+
+## Local runtime state some of the services in docker-compose.yml (or a
+## plain `dotnet run`) generate on the host — never build inputs
+.azurite/
+
+# Note: Dockerfile/docker-compose.yml/.dockerignore themselves are
+# deliberately NOT listed here. `docker build -f ...` always reads the
+# Dockerfile straight off disk regardless of .dockerignore — this file only
+# filters what COPY/ADD instructions can see — and src/Atlas.Api/Dockerfile's
+# own `COPY src/ src/` step is narrow enough that excluding them would buy
+# nothing anyway.

@@ -1,0 +1,128 @@
+# Del 17 — runs the whole local stack in containers: Atlas.Api plus a real
+# SQL Server, a real Redis, and a real Azurite, each in its own container on
+# one Compose-managed network where they can reach each other by service
+# name (see appsettings.Docker.json). Same "prefer a real local equivalent
+# over a fake" principle this project already followed for LocalDB (Del 9),
+# a Redis container (Del 13) and Azurite itself (Del 10) — this just moves
+# every piece of that story into containers instead of running some of them
+# directly on Peter's machine.
+#
+# Usage: `docker compose up --build` from the repository root. First run is
+# slow (pulling three base images plus SQL Server's own multi-hundred-MB
+# image, then a full `dotnet restore`); every run after that reuses Docker's
+# build cache and the sqlserver/redis/azurite containers' own image layers.
+#
+# Deliberately NOT included here: Atlas.Worker and a Service Bus emulator.
+# Del 17, like Del 14 and Del 16 before it, is scoped to Atlas.Api only (see
+# docs/ARCHITECTURE.md's Del 17 section) — Atlas.Worker has no Dockerfile of
+# its own yet, and Service Bus has no local emulator at all (a gap Del 12
+# already accepted, not something Del 17 introduces). The "api" service
+# below still starts and runs fine without either: ticket-assignment
+# publishing to Service Bus is fail-open by design (Del 12) and simply logs
+# a warning instead of crashing when there's nothing to talk to.
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      # Matches appsettings.Docker.json's ConnectionStrings:AtlasDb exactly —
+      # this is a throwaway password for a container with no data worth
+      # protecting (docker compose down -v deletes it entirely), the same
+      # trust level this project already gives the JWT signing key committed
+      # in appsettings.Development.json. Never reuse this for anything real.
+      MSSQL_SA_PASSWORD: "P@ssw0rd_Atlas2026"
+    ports:
+      # Exposed to the host too (not just the compose network) purely so
+      # Peter can point SSMS/Azure Data Studio at localhost:1433 to look
+      # around inside the containerized database — Atlas.Api itself reaches
+      # it via the service name "sqlserver" over the compose network, never
+      # through this host-mapped port.
+      - "1433:1433"
+    volumes:
+      # A named volume, not a bind mount: the database's data/log files
+      # persist across `docker compose down` (though not `docker compose
+      # down -v`, which deletes named volumes too) without cluttering the
+      # repo folder with SQL Server's own binary files the way a bind mount
+      # into ./ would.
+      - atlas-sqlserver-data:/var/opt/mssql
+    healthcheck:
+      # Tries both known sqlcmd locations: newer mssql-server images moved
+      # the SQL Server command-line tools from /opt/mssql-tools/bin to
+      # /opt/mssql-tools18/bin (the "18" is the ODBC driver version, not a
+      # SQL Server version) as part of switching to encrypted-by-default
+      # connections; -C trusts the container's own self-signed certificate,
+      # which sqlcmd18 refuses to do by default otherwise. Whichever path
+      # exists on the image actually pulled succeeds; the other simply
+      # isn't found and falls through.
+      test: >
+        /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$$MSSQL_SA_PASSWORD" -C -Q "SELECT 1" ||
+        /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "$$MSSQL_SA_PASSWORD" -Q "SELECT 1"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  redis:
+    # Same bare "redis" image README.md's own `docker run -d --name
+    # atlas-redis -p 6379:6379 redis` already uses outside Compose — no
+    # reason to pin a different tag here than the one already working.
+    image: redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  azurite:
+    # The official Azurite Docker image — a different distribution channel
+    # than README.md's `npm install -g azurite` for a plain `dotnet run`,
+    # but the exact same emulator underneath. Compose mode uses the Docker
+    # image specifically because a container can't easily reach a process
+    # running directly on the Windows host (Blob Storage lives at
+    # appsettings.Docker.json's BlobEndpoint=http://azurite:10000/..., a
+    # hostname only Docker's own network can resolve).
+    image: mcr.microsoft.com/azure-storage/azurite
+    ports:
+      - "10000:10000"
+    healthcheck:
+      # No curl/wget in this Node-based image, so the check uses Node's own
+      # built-in net module — already present, since Node is the image's
+      # entire runtime — to confirm something is actually listening on
+      # Azurite's blob port before letting "api" start.
+      test: ["CMD", "node", "-e", "require('net').connect(10000,'localhost').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      # See src/Atlas.Api/Dockerfile's own top comment: the context has to
+      # be the repository root, not src/Atlas.Api/, because Atlas.Api.csproj's
+      # ProjectReferences reach outside that folder.
+      context: .
+      dockerfile: src/Atlas.Api/Dockerfile
+    environment:
+      # Selects appsettings.Docker.json (layered on top of appsettings.json,
+      # the same layering mechanism Development/Testing already use) — see
+      # that file's own _comment for exactly what it overrides and why.
+      ASPNETCORE_ENVIRONMENT: Docker
+    ports:
+      - "8080:8080"
+    depends_on:
+      # condition: service_healthy — not just service_started — is what
+      # actually solves the SQL-Server-takes-a-while-to-boot problem:
+      # without it, Compose would start "api" the instant the sqlserver
+      # *container process* exists, seconds before SQL Server itself is
+      # actually ready to accept a connection, and AddPersistence's
+      # EnableRetryOnFailure (3 retries, up to 5s apart) isn't reliably
+      # enough headroom to cover a cold SQL Server startup on its own.
+      sqlserver:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      azurite:
+        condition: service_healthy
+
+volumes:
+  atlas-sqlserver-data:

@@ -136,20 +136,29 @@ Principle, not just a folder convention.
   optional **Application Insights** sink (`Serilog.Sinks.ApplicationInsights`,
   wired up only when `ApplicationInsights:ConnectionString` is set) — see
   [Del 14](#roadmap) below
+- **Docker** (`src/Atlas.Api/Dockerfile`, multi-stage: SDK to build, the much
+  smaller ASP.NET Core runtime image to ship) and **Docker Compose**
+  (`docker-compose.yml`) running the whole local stack — `Atlas.Api` plus
+  containerized SQL Server, Redis and Azurite — in one command; see
+  [Del 17](#roadmap) below and "[Alternative: run everything in
+  Docker](#alternative-run-everything-in-docker-del-17)" above
 
-Planned for later phases (see [Roadmap](#roadmap)): Docker, Bicep, and a
-React frontend. (Key Vault and a CI/CD pipeline are already in place as of
-Del 8, Azure SQL and Blob Storage as of Del 9/10, a background worker as of
-Del 11, Service Bus publish/consume as of Del 12, Redis caching as of
-Del 13, structured logging with an optional Application Insights sink as of
-Del 14, the audit trail as of Del 15, and a broader test suite (93 unit +
-19 integration tests) as of Del 16 — see below — all pulled forward rather
-than left for later.)
+Planned for later phases (see [Roadmap](#roadmap)): Bicep and a React
+frontend. (Key Vault and a CI/CD pipeline are already in place as of Del 8,
+Azure SQL and Blob Storage as of Del 9/10, a background worker as of Del 11,
+Service Bus publish/consume as of Del 12, Redis caching as of Del 13,
+structured logging with an optional Application Insights sink as of Del 14,
+the audit trail as of Del 15, a broader test suite (93 unit + 19 integration
+tests) as of Del 16, and the whole local stack running in Docker as of
+Del 17 — see below — all pulled forward rather than left for later.)
 
 ## Project structure
 
 ```
 ProjectAtlas.sln
+docker-compose.yml         Del 17 — sqlserver/redis/azurite/api, healthchecks,
+                           condition: service_healthy gating api's startup
+.dockerignore               Del 17 — keeps host bin/obj/tests/docs out of the build context
 src/
   Atlas.Domain/            Entities, enums, domain exceptions, Permissions/RolePermissions
   Atlas.Application/       DTOs, service interfaces — TicketService, AuthService,
@@ -165,11 +174,15 @@ src/
                            AuditLogs), Program.cs (Del 14: two-stage Serilog
                            bootstrap + UseSerilogRequestLogging; also exposes
                            `public partial class Program {}` for Del 16's
-                           WebApplicationFactory<Program>), appsettings,
-                           appsettings.Testing.json (Del 16 — a dedicated
-                           AtlasDb_Test connection string)
+                           WebApplicationFactory<Program>), Dockerfile (Del 17 —
+                           multi-stage build, see the file's own top comment),
+                           appsettings, appsettings.Testing.json (Del 16 — a
+                           dedicated AtlasDb_Test connection string),
+                           appsettings.Docker.json (Del 17 — sqlserver/redis/azurite
+                           reached by Compose service name, not localhost)
   Atlas.Worker/            .NET Generic Host (Del 11) — OverdueTicketWorker (polls every
-                           5 minutes) and TicketAssignedConsumer (Del 12, Service Bus)
+                           5 minutes) and TicketAssignedConsumer (Del 12, Service Bus).
+                           No Dockerfile of its own yet (Del 17 is scoped to Atlas.Api)
 tests/
   Atlas.Domain.Tests/       xUnit tests for Ticket's business rules, RolePermissions, User,
                            Organization, Project, Team, AuditLog
@@ -254,6 +267,64 @@ as a fallback reference.
 dotnet restore
 dotnet build
 ```
+
+### Alternative: run everything in Docker (Del 17)
+
+Steps 2–7 below (LocalDB, Redis, Azurite, `dotnet run`) each set up one piece
+of the local stack by hand. `docker-compose.yml` (repository root) sets up
+all four containers — a real SQL Server, a real Redis, a real Azurite, and
+`Atlas.Api` itself — in one command, each reachable from the others by
+Compose service name (see `src/Atlas.Api/appsettings.Docker.json`, a third
+environment alongside Development and Testing):
+
+```bash
+docker compose up --build
+```
+
+The first run is slow (pulling SQL Server's own multi-hundred-MB image, then
+a full `dotnet restore` inside the build stage); every run after that reuses
+Docker's build cache. Once it settles, Swagger UI is at
+`http://localhost:8080/swagger` — a different port than steps 7/8 below,
+since those run `Atlas.Api` directly on the host instead of inside a
+container. `docker compose up` waits for `sqlserver`/`redis`/`azurite`'s own
+healthchecks before starting `api`, and `Atlas.Api` auto-applies EF Core
+migrations on startup for this environment too (the same convenience
+Development already has), so the containerized `AtlasDb` is created and
+migrated automatically — no manual `dotnet ef database update` needed here.
+
+You'll likely see one or two transient `Login failed for user 'sa'` errors
+in the `sqlserver`/`api` logs during the first startup — SQL Server's own
+password-policy initialization racing the healthcheck probe and `api`'s
+first connection attempt. Both are expected and self-healing: the stack
+retries and continues on its own (`EnableRetryOnFailure` plus the compose
+healthcheck gate), and migrations complete right after. Not a sign anything
+is broken.
+
+This containerized `AtlasDb` starts just as empty as a fresh LocalDB would,
+so the same bootstrapping note in step 8 below applies here too — you need
+one real `organizationId` before `POST /api/auth/register` will work. Load
+`sql/002_SeedData.sql` into the running container instead of against
+LocalDB:
+
+```bash
+docker compose cp sql/002_SeedData.sql sqlserver:/tmp/002_SeedData.sql
+docker compose exec sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "P@ssw0rd_Atlas2026" -C -d AtlasDb -i /tmp/002_SeedData.sql
+docker compose exec sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "P@ssw0rd_Atlas2026" -C -d AtlasDb -Q "SELECT Id, Name FROM dbo.Organizations"
+```
+
+(If your image doesn't have `mssql-tools18`, use `/opt/mssql-tools/bin/sqlcmd`
+without `-C` instead — the healthcheck in `docker-compose.yml` tries both for
+the same reason.) **Running this in Git Bash on Windows?** Prefix each
+`docker compose exec` line with `MSYS_NO_PATHCONV=1` — Git Bash otherwise
+rewrites the Unix-style `/opt/...` path into a Windows path before Docker
+ever sees it, which fails with a confusing "no such file or directory" from
+inside the container.
+
+`docker compose down` stops everything; add `-v` to also delete the SQL
+Server data volume and start from a genuinely empty database next time.
+Deliberately not included: `Atlas.Worker` and a Service Bus emulator — see
+`docker-compose.yml`'s own top comment and `docs/ARCHITECTURE.md`'s Del 17
+section for why.
 
 ### 2. Point the API at a database
 
@@ -716,7 +787,7 @@ database.
       the Azure side: deciding `Atlas.Worker`'s Azure hosting shape and
       provisioning an actual Azure Cache for Redis instance (see
       `docs/AZURE_DEPLOYMENT.md` sections 9–10)
-- [~] **Phase 5 — Quality**: Del 14 (Serilog console logging with an optional
+- [x] **Phase 5 — Quality**: Del 14 (Serilog console logging with an optional
       Application Insights sink, scoped to Atlas.Api) confirmed working
       end-to-end locally (2026-09-12) via `scripts/test-del14-logging.sh` —
       the app already had extensive `ILogger<T>` call sites throughout the
@@ -731,8 +802,16 @@ database.
       `WebApplicationFactory<Program>`), all passing. Integration tests are
       tagged `[Trait("Category","Integration")]` and excluded from CI (see
       `azure-pipelines.yml`) as a local-only, opt-in tier, the same status
-      the bash smoke-test scripts already have. Still open in this phase:
-      Docker (Del 17)
+      the bash smoke-test scripts already have. Del 17 (Docker — a
+      multi-stage `Dockerfile` for `Atlas.Api` plus `docker-compose.yml`
+      running the whole local stack, containerized SQL Server/Redis/Azurite
+      included) is now also confirmed working end-to-end locally
+      (2026-09-14): `docker compose up --build` builds the image, starts all
+      four containers gated by healthchecks, auto-migrates the containerized
+      `AtlasDb`, and a full register → login round trip succeeds through
+      Swagger UI at `http://localhost:8080/swagger` (see "[Alternative: run
+      everything in Docker](#alternative-run-everything-in-docker-del-17)"
+      above). Phase 5 complete.
 - [ ] **Phase 6 — DevOps**: Bicep (Infrastructure as Code) — CI/CD itself
       already exists as of Del 8, on Azure Pipelines
 - [ ] **Phase 7 — Polish**: React frontend, dashboard, demo environment
