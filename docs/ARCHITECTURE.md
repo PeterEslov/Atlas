@@ -1071,6 +1071,116 @@ forced the question. Corrected in both `azure-pipelines.yml` and
 uses, rather than an illustrative placeholder), after which both
 `BuildAndTest` (`Build` and `DockerBuild`) and `Deploy` ran green.
 
+**Del 19 — Infrastructure as Code: redeploying the environment from Bicep,
+and a real-deployment saga worth reading in full.** Every earlier Azure Del
+(8 through 14) provisioned its resource by hand, one `az` command at a
+time, documented as a checklist in `docs/AZURE_DEPLOYMENT.md`. Del 19 turns
+that checklist into `infra/main.bicep` and a `modules/` folder — one file
+per resource type (App Service plan, Web App, SQL database, Storage
+account, Application Insights, Redis, plus a role-assignment module per
+existing resource it needs access to), deployed at resource-group scope
+against `rg-projectatlas-dev-sc`. The existing Key Vault, SQL logical
+server and Service Bus namespace are all declared `existing` and never
+owned by this template — consistent with why each was reused rather than
+provisioned fresh in the first place (see the Del 9/12 sections above) —
+and modules that reach into a *different* resource group than the main
+deployment (the SQL database, onto a server that might not live in
+`rg-projectatlas-dev-sc`; the Service Bus role assignment, against a
+namespace that doesn't either) use `scope: resourceGroup(...)` on the
+module call, a pattern borrowed — as a *pattern*, not as code, per Peter's
+explicit instruction — from a personal Bicep template repo of his
+(`KR.AZ.Bicep.Templates`) that already used the same cross-resource-group
+scoping for an Application Insights workspace module.
+
+Two design choices worth calling out on their own. First,
+`Jwt--SigningKey` and `ConnectionStrings--AtlasDb` — the two Key Vault
+secrets Del 8/9 already set by hand — are deliberately never written by
+any Bicep module here; only the one secret that's genuinely new
+(`Redis--ConnectionString`, below) gets a `keyVaultSecret.bicep` call, so
+re-running this deployment can never silently overwrite a secret that's
+already correct. Second, the Key Vault ("Key Vault Secrets User") and
+Storage ("Storage Blob Data Contributor") role assignments Del 8/10 also
+already granted by hand are *not* redeployed either, even though the
+modules for them (`keyVaultRoleAssignment.bicep`,
+`storageRoleAssignment.bicep`) still exist in the repo — a real `az
+deployment group create` run explained why (see below), and it's worth
+understanding rather than just a rule to follow.
+
+**Confirmed working end-to-end against the live subscription on
+2026-09-14** — but only after four real, distinct failures, each diagnosed
+from Azure's own error message rather than guessed at in advance, which is
+the actual point of running IaC for real instead of stopping at "it
+compiles":
+
+1. `az bicep build` (and the CI job below) only ever check syntax — they
+   never caught that `webApp.bicep` hardcoded `siteConfig.alwaysOn: true`.
+   Azure's Free (F1) App Service tier — this project's actual plan SKU —
+   doesn't support Always On at all; deploying that setting against F1
+   fails outright. This one surfaced from `az deployment group what-if`,
+   before any real resource was touched: the preview showed
+   `alwaysOn: false => true` as a pending change, which was the cue to
+   check F1's actual capabilities rather than assume the setting was safe.
+   Fixed by turning `alwaysOn` into a parameter defaulting to `false`
+   (matching what Del 8 already had running), documented in
+   `webApp.bicep` as only safe to flip once the plan SKU is B1 or higher.
+2. The first real `az deployment group create` failed two of its
+   resources with `RoleAssignmentExists`. Azure refuses a second role
+   assignment for the same (identity, role, scope) triple no matter what
+   the new assignment's own resource name is — so the deterministic-GUID
+   naming trick that makes a *Bicep-created* role assignment safe to
+   redeploy doesn't help when the original assignment was created by hand
+   via `az role assignment create` (a different, randomly-named resource),
+   which is exactly what Del 8/10 did. Nothing to fix code-wise: this is
+   Bicep correctly detecting the work is already done. The two calls
+   (`keyVaultRoleAssignment`, `storageRoleAssignment`) were removed from
+   `main.bicep`'s module list — the modules themselves stay in the repo,
+   still correct, useful as-is against a fresh environment that doesn't
+   have these grants yet.
+3. The same run failed Redis outright: `"Azure Cache for Redis is
+   retiring, create Azure Managed Redis instance instead."` — a platform-
+   level retirement neither Peter nor this session knew about ahead of
+   time, discovered only because a real deployment was attempted against
+   a real subscription. `redisCache.bicep` was rewritten against the
+   replacement resource type, `Microsoft.Cache/redisEnterprise` (+ its
+   required `.../databases` child resource), Balanced_B0 the cheapest SKU
+   in the new tier structure — researched against Microsoft's current
+   documentation rather than pattern-matched from training data, given how
+   recently the platform had changed. That rewrite surfaced two further,
+   smaller gaps on the next two attempts: the API version originally
+   chosen (`2024-05-01-preview`) wasn't actually registered in Peter's
+   subscription/region (`NoRegisteredProviderFound`, which usefully listed
+   the versions that *are* registered — pinned to the stable `2025-07-01`
+   instead), and that version's schema turned out to require
+   `publicNetworkAccess` explicitly (set to `'Enabled'`, since this
+   project has no VNet integration anywhere — nothing else could reach the
+   cache otherwise).
+4. Even after Redis itself deployed successfully, the *same* deployment
+   failed one step later: `"The ListKeys operation is not supported when
+   access keys are disabled."` Azure Managed Redis defaults new databases
+   to key-based access **disabled**, steering toward Entra ID
+   authentication instead — a deliberate platform default, not a bug, but
+   one this project's approach (a `StackExchange.Redis` client reading a
+   connection string with a password from Key Vault, the same shape Del
+   13 already used against classic Redis) genuinely needs turned on. Fixed
+   by setting `accessKeysAuthentication: 'Enabled'` explicitly on the
+   database resource rather than relying on a default that had quietly
+   flipped.
+
+Every one of these was root-caused from the exact text Azure returned,
+confirmed by re-running the real command, never by inference from
+documentation alone once a live counter-example existed — the same
+discipline this project has applied to every other Azure Del (see the Del
+18 section above for the `azureServiceConnection` mismatch, diagnosed the
+same way). `azure-pipelines.yml` also gained a `BicepValidate` job
+alongside `DockerBuild`, on the same "prove it still compiles on every
+push" logic — `az bicep build` only, no Azure calls, no cost, and
+deliberately not a `what-if`/`create` in CI: those need real
+environment-specific parameter values and would provision or change
+billable resources unattended on every push, exactly the kind of risk this
+project has avoided everywhere else (see `docs/AZURE_DEPLOYMENT.md`'s "you
+run this yourself" reasoning, restated in `infra/main.bicep`'s own header
+comment).
+
 ## Current known simplifications (by design)
 
 - Azure SQL (Del 9) reuses Peter's existing SQL login for the moment — the
@@ -1105,10 +1215,17 @@ uses, rather than an illustrative placeholder), after which both
   of guard `GetNotifiedTicketIdsAsync` already gives Del 11's overdue-ticket
   path against its own, different kind of duplicate.
 - Del 12's Service Bus RBAC role (`Azure Service Bus Data Owner`) is granted
-  to Peter's own Azure AD identity for local development only —
-  `Atlas.Api`'s Azure App Service managed identity has not yet been granted
-  a Service Bus role there, so publishing from the deployed API doesn't work
-  yet.
+  to Peter's own Azure AD identity for local development. The deployed
+  `Atlas.Api`'s managed identity was, until Del 19, missing the
+  corresponding role and couldn't publish from Azure at all — closed by
+  `infra/modules/serviceBusRoleAssignment.bicep` (2026-09-14), which grants
+  it the narrower "Azure Service Bus Data Sender" instead of "Data Owner"
+  (least-privilege: the deployed API only ever publishes, never consumes or
+  administers the namespace). The role assignment itself is confirmed
+  created (`az deployment group create`, 2026-09-14); an actual publish
+  call against the deployed API, and certainly a full round trip, still
+  isn't verified — see `docs/AZURE_DEPLOYMENT.md` section 9.2, which
+  remains accurate: no consumer exists in Azure yet to confirm one.
 - `Atlas.Worker` (Del 11) only runs locally so far — it isn't deployed
   anywhere in Azure yet. *How* it should run there (a Container App Job on a
   schedule, a WebJob alongside the existing App Service, Azure Functions with
@@ -1117,15 +1234,28 @@ uses, rather than an illustrative placeholder), after which both
   the Azure hosting shape as its own step" order Del 8/9/10 already followed
   for `Atlas.Api` itself. Del 12's Service Bus consumer inherits the same
   open question, since it lives inside `Atlas.Worker`.
-- Del 13's Redis cache has no managed-identity path at all, unlike Blob
-  Storage (Del 10) and Service Bus (Del 12): classic (non-Enterprise) Azure
-  Cache for Redis only supports key-based authentication, so
+- Del 13's Redis cache has no managed-identity path at this project's
+  configuration, unlike Blob Storage (Del 10) and Service Bus (Del 12):
   `Redis:ConnectionString` genuinely is a secret in Azure — a Key Vault
-  entry, not a plain App Setting, unlike `BlobStorage:AccountUrl`/
-  `ServiceBus:FullyQualifiedNamespace` — and no Azure Cache for Redis
-  instance has been provisioned yet at all (see `docs/AZURE_DEPLOYMENT.md`
-  section 10 for the plan). Del 13 is confirmed working only locally, against
-  a Docker Redis container, so far.
+  entry (`Redis--ConnectionString`), not a plain App Setting, unlike
+  `BlobStorage:AccountUrl`/`ServiceBus:FullyQualifiedNamespace`. An Azure
+  Redis instance is now provisioned (Del 19, 2026-09-14,
+  `infra/modules/redisCache.bicep`) — but as Azure Managed Redis
+  (`Microsoft.Cache/redisEnterprise`), not the classic Azure Cache for
+  Redis `docs/AZURE_DEPLOYMENT.md` section 10 originally planned around:
+  classic Redis turned out to be mid-retirement when Del 19 first tried to
+  deploy it, a platform change neither discovered until a real `az
+  deployment group create` failed with Azure saying so outright. Managed
+  Redis *does* have an Entra ID/RBAC auth path in principle, just not at
+  the access-policy configuration this project's Bicep sets up (key-based
+  access, `accessKeysAuthentication: 'Enabled'`) — closing that gap the
+  same way Blob Storage/Service Bus already are is a reasonable Del 20+
+  candidate, not something Del 19 needed to solve. `RedisTicketStatsCache`
+  itself (the C# cache-aside logic) hasn't changed at all — same
+  StackExchange.Redis client, same connection-string shape, just a
+  different port (10000, not 6380) once the app actually points at the
+  cloud instance instead of the local Docker container Del 13 is still
+  confirmed working against day to day.
 - Ticket hard-delete (`TicketService.DeleteAsync`) cascades `Attachment` rows
   away via the configured `OnDelete(DeleteBehavior.Cascade)`, but doesn't
   clean up the matching blobs in Storage the other direction — a theoretical
@@ -1141,13 +1271,22 @@ uses, rather than an illustrative placeholder), after which both
   "get the App first, extend to the Worker as its own step" order
   `AddPersistence`/`AddBlobStorage`/`AddAuthInfrastructure` already
   established (see Del 11 above) for infrastructure wiring generally.
-- `ApplicationInsights:ConnectionString` is empty in `appsettings.json` and
-  absent entirely from `appsettings.Development.json` by design — no
-  Application Insights resource has been provisioned in Azure yet (see
-  `docs/AZURE_DEPLOYMENT.md`), so local development never attempts to send
-  telemetry anywhere. `scripts/test-del14-logging.sh` only ever passes a
-  fake connection string to prove the sink wires up without crashing the
-  app, not that telemetry reaches a real resource.
+- `ApplicationInsights:ConnectionString` is still empty in `appsettings.json`
+  and absent entirely from `appsettings.Development.json` by design, so
+  local development never attempts to send telemetry anywhere.
+  `scripts/test-del14-logging.sh` still only ever passes a fake connection
+  string to prove the sink wires up without crashing the app, not that
+  telemetry reaches a real resource — that's now genuinely possible to
+  verify, though, since Del 19 (2026-09-14,
+  `infra/modules/applicationInsights.bicep`) provisioned a real,
+  workspace-based Application Insights resource (plus its backing Log
+  Analytics workspace) for the first time; the deployed `Atlas.Api`'s
+  `ApplicationInsights__ConnectionString` app setting is wired to it
+  (`infra/modules/webApp.bicep`). Whether telemetry actually shows up in
+  the portal against real production traffic hasn't been checked yet —
+  Del 19 provisioned the resource and wired the connection string, the
+  same "infrastructure, not verification" scope every other module in
+  `infra/` has.
 - The JWT signing key and the Azure SQL connection string both live in
   `appsettings.Development.json` / user-secrets locally, and as Azure Key
   Vault secrets once deployed (`Jwt--SigningKey` since Del 8,
@@ -1218,3 +1357,25 @@ uses, rather than an illustrative placeholder), after which both
   own service-connection mismatch (see that Del's section above) is a live
   example of exactly this gap; it was caught by running the pipeline, not
   by anything checking the YAML beforehand.
+- `infra/modules/redisCache.bicep`'s Redis access key travels from the
+  `redisEnterprise/databases` resource's `listKeys()` call to the
+  `Redis--ConnectionString` Key Vault secret as a plain (non-`@secure()`)
+  module output, because Bicep module outputs can't be marked `@secure()`
+  the way parameters can. The key ends up recorded in this deployment's
+  history (`az deployment group show`), readable by anyone with read
+  access to the resource group's deployment history, not just Key Vault
+  Secrets User — a real gap, same category as the reused SQL admin login
+  above, not something Del 19 solves. Rotating the key after deployment
+  (`az redis regenerate-keys`, or its Managed Redis equivalent) and
+  clearing old deployment history are the practical mitigations until a
+  cleaner pattern replaces it.
+- `BicepValidate` (Del 19's CI job) only ever runs `az bicep build` —
+  syntax and type compilation, no Azure calls at all. It would have caught
+  none of the four real failures Del 19 actually hit deploying for real
+  (see that Del's section above): a role assignment collision, a retired
+  resource type, an unregistered API version, and a platform default that
+  needed overriding are all only visible to a real `az deployment group
+  what-if`/`create` against a real subscription, which CI deliberately
+  never runs (cost/risk, not a testing gap CI could close for free — see
+  the reasoning in `infra/main.bicep`'s header comment). A green
+  `BicepValidate` run is proof the templates parse, not proof they deploy.

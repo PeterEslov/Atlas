@@ -708,11 +708,24 @@ vid fel, kastar aldrig ett fel till klienten — se
 just nu. Meddelandet hamnar i `atlas-ticket-events`-topicet, men ingen
 konsument i Azure läser det förrän `Atlas.Worker` faktiskt driftsätts dit.
 
-## 10. Del 13: Redis — Azure Cache for Redis (öppen, se nedan)
+## 10. Del 13: Redis — Azure Cache for Redis (stängd av Del 19, se nedan)
 
-Samma sak som avsnitt 9 gäller här: det här är en plan att följa när du är
-redo, inte en logg över redan utfört arbete. Ingen Azure Cache for
-Redis-instans är provisionerad än — Del 13 är klar och verifierad
+**Uppdatering, Del 19 (2026-09-14): det här avsnittets manuella `az`-väg är
+inte längre den som faktiskt användes.** En riktig Redis-instans finns nu
+provisionerad — via `infra/main.bicep`, inte via kommandona nedan — se
+avsnitt 12. Ett genuint fynd på vägen dit, värt att känna till innan du
+någonsin kör kommandona i det här avsnittet för hand: **klassiska Azure
+Cache for Redis (resurstypen `az redis create` nedan skapar) håller på att
+fasas ut** — ett första försök att deploya exakt den resurstypen via Bicep
+gav felet "Azure Cache for Redis is retiring, create Azure Managed Redis
+instance instead." Kommandona nedan är kvar oförändrade som referens (de
+fungerade fram tills nyligen, och kan fortfarande fungera i vissa
+prenumerationer under en övergångsperiod), men avsnitt 12 är den väg som
+faktiskt användes och är värd att följa istället.
+
+Ursprungligt resonemang, oförändrat: det här är samma sak som avsnitt 9 —
+en plan snarare än en logg, till dess Del 19 kom och faktiskt körde den.
+Del 13 (cache-aside-logiken i C#) är sedan tidigare klar och verifierad
 **lokalt**, mot en Docker-container (se README och
 `scripts/test-del13-redis-cache.sh`), exakt samma "riktig lokal motsvarighet
 i stället för en emulator eller produktion självt"-idé som LocalDB och
@@ -784,16 +797,24 @@ cachar mot den riktiga Azure Cache for Redis-instansen, inte bara att
 endpointen svarar. Samma metodik som `scripts/test-del13-redis-cache.sh`
 redan använder lokalt, bara mot `$WEBAPP_NAME` istället för `localhost`.
 
-## 11. Del 14: Application Insights (öppen, se nedan)
+## 11. Del 14: Application Insights (stängd av Del 19, se nedan)
 
-Samma sak som avsnitt 9 och 10 gäller här: det här är en plan att följa när
-du är redo, inte en logg över redan utfört arbete. Del 14 (Serilog +
-valfritt Application Insights-sink, se `docs/ARCHITECTURE.md`s Del
-14-avsnitt) är klar och verifierad **lokalt** via
+**Uppdatering, Del 19 (2026-09-14): samma sak som avsnitt 10 ovan — det
+här avsnittets manuella `az`-väg är inte längre den som faktiskt
+användes.** En riktig Application Insights-resurs (workspace-baserad, med
+ett eget Log Analytics-workspace) finns nu provisionerad via
+`infra/main.bicep` — se avsnitt 12. Kommandona nedan är kvar oförändrade
+som referens och fungerar fortfarande utmärkt om du någon gång vill skapa
+en till Application Insights-resurs för hand.
+
+Ursprungligt resonemang, oförändrat: samma sak som avsnitt 9 och 10 — en
+plan snarare än en logg, till dess Del 19 kom och faktiskt körde den. Del
+14 (Serilog + valfritt Application Insights-sink, se `docs/ARCHITECTURE.md`s
+Del 14-avsnitt) är sedan tidigare klar och verifierad **lokalt** via
 `scripts/test-del14-logging.sh` — men bara med en påhittad
 `ApplicationInsights:ConnectionString` som bevisar att koden inte kraschar
-när sinket slås på, inte att telemetri faktiskt når en riktig Azure-resurs.
-Ingen Application Insights-resurs finns provisionerad i prenumerationen än.
+när sinket slås på; huruvida telemetri faktiskt når den nu riktiga
+Azure-resursen är fortfarande overifierat (se avsnitt 12).
 
 ### 11.1 Skapa en Application Insights-resurs
 
@@ -984,8 +1005,111 @@ och `Deploy` gröna.
 Om/när `DockerBuild` någon gång utökas till att faktiskt pusha till ett
 Azure Container Registry, och App Service i så fall byter till "Web App for
 Containers" (det öppna vägvalet Del 17:s och Del 18:s egna avsnitt i
-`docs/ARCHITECTURE.md` båda flaggar), *då* får Fas 6 sitt första riktiga
+`docs/ARCHITECTURE.md` båda flaggar), *då* får det ett eget nytt
 provisioneringsavsnitt här — ett nytt Container Registry att skapa, en ny
 roll (`AcrPush` för pipelinens service connection, `AcrPull` för App
-Service:s managed identity) att bevilja. Tills dess är Fas 6:s enda
-återstående punkt Del 19 (Bicep) — se README.md:s Roadmap.
+Service:s managed identity) att bevilja. Det är dock inte längre Fas 6:s
+enda återstående punkt — se avsnitt 12 nedan, och README.md:s Roadmap.
+
+## 12. Del 19: Infrastructure as Code (Bicep) — hela miljön omskriven som kod
+
+Varje tidigare Azure-Del (8 till 14) provisionerade sin resurs för hand,
+ett `az`-kommando i taget, dokumenterat som en checklista i den här filen.
+Del 19 gör om den checklistan till kod: `infra/main.bicep` plus en
+`infra/modules/`-mapp, en fil per resurstyp. Från och med nu är avsnitt
+1/3/7/8/9.1 ovan (App Service-plan/Web App, Key Vault-koppling, SQL-databas,
+Storage-konto, Service Bus-rolltilldelning) och avsnitt 10/11 (Redis,
+Application Insights — se uppdateringarna där) alla omdeploybara med ett
+enda kommando istället för en lång rad `az`-kommandon. De manuella
+kommandona i alla dessa avsnitt är kvar oförändrade som referens/fallback,
+inte borttagna — men `infra/`-mallarna är den väg som faktiskt användes för
+Del 19 och är den du bör utgå från härifrån.
+
+**Så här kör du det** — fullständig förklaring, inklusive vad mallen
+medvetet *inte* gör, står i `infra/main.bicep`s egen header-kommentar; den
+korta versionen:
+
+```bash
+az bicep build --file infra/main.bicep          # bara syntaxkoll, inga Azure-anrop — samma sak pipelinens BicepValidate-jobb kör på varje push
+az deployment group what-if `
+  --resource-group rg-projectatlas-dev-sc `
+  --template-file infra/main.bicep `
+  --parameters infra/main.parameters.json         # förhandsgranska, inget deployas
+az deployment group create `
+  --resource-group rg-projectatlas-dev-sc `
+  --template-file infra/main.bicep `
+  --parameters infra/main.parameters.json         # faktisk deployment
+```
+
+(Windows/PowerShell-syntax ovan, med backtick-radbrytningar — byt mot `\`
+i Git Bash/WSL.) `infra/main.parameters.json` har platshållarvärden för
+ditt Key Valv, din SQL-server och ditt Service Bus-namespace (namn +
+resursgrupp för varje) samt ett Storage-kontonamn — fyll i dina riktiga
+värden innan du kör `what-if`/`create`.
+
+**Bekräftat fungerande end-to-end mot den skarpa prenumerationen
+2026-09-14 — men inte på första, andra eller tredje försöket.** Fyra
+riktiga, distinkta fel dök upp under vägen, vart och ett diagnostiserat
+från Azures egna felmeddelande istället för gissat i förväg — se
+`docs/ARCHITECTURE.md`s Del 19-avsnitt för den fullständiga, tekniska
+genomgången av alla fyra. Kort sammanfattat här:
+
+1. `what-if` visade att `alwaysOn` skulle sättas till `true` på Web
+   App:en — vilket inte stöds alls på F1 (gratisnivån, den faktiska
+   plan-SKU:n). Upptäckt innan någon riktig resurs rördes, tack vare att
+   `what-if` kördes först. Rättat genom att göra `alwaysOn` till en
+   parameter som defaultar till `false`.
+2. Den första riktiga `create`-körningen failade två resurser med
+   `RoleAssignmentExists` — Key Vault- och Storage-rolltilldelningarna som
+   redan fanns sedan Del 8/10, skapade för hand. Inget att rätta i
+   koden: Azure upptäckte helt korrekt att arbetet redan var gjort. De
+   två modulanropen togs bort ur `main.bicep` (modulerna finns kvar i
+   repot, som referens).
+3. Samma körning failade Redis helt: klassiska Azure Cache for Redis
+   håller på att fasas ut — en plattformsförändring varken jag eller du
+   kände till i förväg, upptäckt bara för att en riktig deployment
+   faktiskt försöktes mot en riktig prenumeration. `redisCache.bicep`
+   skrevs om mot den nya resurstypen (`Microsoft.Cache/redisEnterprise`,
+   Azure Managed Redis), vilket i sin tur avslöjade att den första
+   API-versionen jag valde inte var registrerad i din prenumeration/
+   region, och att `publicNetworkAccess` var ett obligatoriskt fält den
+   ursprungliga (preview-baserade) mallen jag utgick från saknade helt.
+4. Efter att Redis väl skapades framgångsrikt failade *samma* deployment
+   ett steg senare: nyckelbaserad åtkomst är avstängd som default på nya
+   Azure Managed Redis-databaser (Azure styr mot Entra ID-autentisering
+   istället) — men den här approachen (StackExchange.Redis-klient +
+   anslutningssträng med lösenord i Key Vault, samma mönster Del 13 redan
+   använde mot klassiska Redis) behöver nycklar påslagna. Rättat genom
+   att explicit sätta `accessKeysAuthentication: 'Enabled'`.
+
+`azure-pipelines.yml` fick också ett nytt jobb, `BicepValidate`, bredvid
+`DockerBuild` — samma "bevisa att den fortfarande kompilerar på varje
+push"-logik, bara `az bicep build`, inga Azure-anrop, ingen kostnad.
+Medvetet **inte** en `what-if`/`create` i pipelinen: det skulle kräva
+riktiga miljöspecifika parametervärden och skulle provisionera eller ändra
+betalresurser (Application Insights, Redis) obevakat på varje push — exakt
+den sortens risk det här projektet undviker överallt annars (se
+resonemanget i avsnitt 0/5 ovan, och `infra/main.bicep`s egen
+header-kommentar).
+
+**Verifiera:**
+
+```bash
+az role assignment list --scope $(az servicebus namespace show --name nspl-sb-core-dev-sc --resource-group rg-core-dev-sc --query id -o tsv) --query "[].roleDefinitionName" -o table
+# förväntat: "Azure Service Bus Data Sender" i listan — den enda genuint
+# nya rolltilldelningen Del 19 gav; Key Vault/Storage-rollerna fanns redan
+
+az monitor app-insights component show --app appi-projectatlas-dev-sc --resource-group rg-projectatlas-dev-sc --query connectionString -o tsv
+# förväntat: en riktig connection string, inte tomt
+
+curl "https://app-projectatlas-dev-sc.azurewebsites.net/health"
+# förväntat: "Healthy" — bekräftar att Web App:en fortfarande svarar efter
+# deploymentets ~/Modify-steg på httpsOnly
+```
+
+Fas 6 är därmed helt klar (Del 18 och Del 19, båda bekräftade fungerande
+end-to-end mot skarp Azure) — se README.md:s Roadmap. Fas 4:s öppna punkt
+är nu bara *var* `Atlas.Worker` ska köras i Azure (avsnitt 9 ovan) — Redis
+och Application Insights, de två andra molnpunkterna Fas 4/5 lämnat efter
+sig, är stängda av Del 19. Fas 3:s enda kvarvarande punkt är fortsatt
+Del 20 (generalisera Key Vault-uppsättningen).

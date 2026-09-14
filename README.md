@@ -142,17 +142,27 @@ Principle, not just a folder convention.
   containerized SQL Server, Redis and Azurite — in one command; see
   [Del 17](#roadmap) below and "[Alternative: run everything in
   Docker](#alternative-run-everything-in-docker-del-17)" above
+- **Bicep** (`infra/`) — Infrastructure as Code for the Azure environment
+  every earlier phase built by hand, one `az` command at a time: the
+  resource group's App Service plan/Web App, the Azure SQL database, the
+  Blob Storage account, and the Service Bus role assignment are all
+  redeployable from `infra/main.bicep`, and Application Insights and Redis
+  (Azure Managed Redis, not the classic, now-retiring Azure Cache for
+  Redis — see [Del 19](#roadmap) below) went from "documented plan" to
+  actually provisioned in Azure for the first time via this Del; see
+  [Del 19](#roadmap) below
 
-Planned for later phases (see [Roadmap](#roadmap)): Bicep and a React
-frontend. (Key Vault and a CI/CD pipeline are already in place as of Del 8,
-Azure SQL and Blob Storage as of Del 9/10, a background worker as of Del 11,
-Service Bus publish/consume as of Del 12, Redis caching as of Del 13,
-structured logging with an optional Application Insights sink as of Del 14,
-the audit trail as of Del 15, a broader test suite (93 unit + 19 integration
-tests) as of Del 16, the whole local stack running in Docker as of Del 17,
-and that Docker image now verified — built, not yet pushed anywhere — on
-every CI run as of Del 18 — see below — all pulled forward rather than left
-for later.)
+Planned for later: a React frontend (Phase 7). (Key Vault and a CI/CD
+pipeline are already in place as of Del 8, Azure SQL and Blob Storage as of
+Del 9/10, a background worker as of Del 11, Service Bus publish/consume as
+of Del 12, Redis caching as of Del 13, structured logging with an optional
+Application Insights sink as of Del 14, the audit trail as of Del 15, a
+broader test suite (93 unit + 19 integration tests) as of Del 16, the whole
+local stack running in Docker as of Del 17, that Docker image verified on
+every CI run as of Del 18, and the entire Azure environment now redeployable
+from Bicep — including, as of Del 19, actually-provisioned Application
+Insights and Redis instances — all pulled forward rather than left for
+later.)
 
 ## Project structure
 
@@ -161,6 +171,18 @@ ProjectAtlas.sln
 docker-compose.yml         Del 17 — sqlserver/redis/azurite/api, healthchecks,
                            condition: service_healthy gating api's startup
 .dockerignore               Del 17 — keeps host bin/obj/tests/docs out of the build context
+infra/                      Del 19 — Infrastructure as Code (Bicep)
+  main.bicep                 Orchestrator, resource-group scoped; see its own header
+                             comment for exactly what it does/doesn't manage and how
+                             to run it (az bicep build / what-if / create)
+  main.parameters.json       Parameter values — fill in your own Key Vault/SQL server/
+                             Service Bus namespace names and resource groups before use
+  modules/                   One file per resource type — App Service plan, Web App,
+                             SQL database, Storage account, Application Insights, Redis
+                             (Azure Managed Redis), plus the Service Bus role assignment;
+                             Key Vault/Storage role-assignment modules also live here,
+                             kept for reference though not called from main.bicep (see
+                             its header comment — that grant already exists from Del 8/10)
 src/
   Atlas.Domain/            Entities, enums, domain exceptions, Permissions/RolePermissions
   Atlas.Application/       DTOs, service interfaces — TicketService, AuthService,
@@ -674,6 +696,20 @@ given to it in Azure DevOps **exactly**, character for character — a stale
 placeholder value here failed the whole `Deploy` stage until corrected (see
 `docs/AZURE_DEPLOYMENT.md` section 5).
 
+Del 19 (2026-09-14) added `infra/` — Bicep templates that redeploy the
+environment sections 1/7/8 above set up by hand, plus a Service Bus role
+assignment (section 9.1) and, genuinely new, Application Insights and Redis
+(Azure Managed Redis) instances that hadn't existed in Azure before. Fill in
+`infra/main.parameters.json` with your own existing-resource names, then
+`az bicep build` / `az deployment group what-if` / `az deployment group
+create` against your resource group — see `infra/main.bicep`'s own header
+comment for the exact commands and what it deliberately doesn't manage.
+`azure-pipelines.yml` also gained a `BicepValidate` job (Del 19) alongside
+`DockerBuild` — it only compiles `infra/main.bicep` (`az bicep build`, no
+Azure calls, no cost) on every push; an actual deployment stays a deliberate
+step you run yourself, the same reasoning as every `az` command in
+`docs/AZURE_DEPLOYMENT.md`.
+
 ## Authentication & authorization
 
 `POST /api/auth/register` and `POST /api/auth/login` are the only anonymous
@@ -824,7 +860,7 @@ database.
       Swagger UI at `http://localhost:8080/swagger` (see "[Alternative: run
       everything in Docker](#alternative-run-everything-in-docker-del-17)"
       above). Phase 5 complete.
-- [~] **Phase 6 — DevOps**: Del 18 (CI/CD — a `DockerBuild` job added to
+- [x] **Phase 6 — DevOps**: Del 18 (CI/CD — a `DockerBuild` job added to
       `azure-pipelines.yml`'s existing `BuildAndTest` stage, building Del 17's
       `Dockerfile` on every push/PR to prove it still builds) confirmed
       working end-to-end against the live pipeline (2026-09-14) — deliberately
@@ -833,7 +869,26 @@ database.
       Azure Container Registry exists yet, and App Service hasn't switched to
       Web App for Containers — a deliberate follow-up decision, not something
       Del 18 needed to make (see `docs/ARCHITECTURE.md`'s Del 18 section).
-      Remaining in this phase: Del 19, Bicep (Infrastructure as Code)
+      Del 19 (Infrastructure as Code, Bicep) confirmed working end-to-end
+      against the live subscription (2026-09-14): `infra/main.bicep`
+      redeploys the App Service plan/Web App, Azure SQL database, Storage
+      account and Service Bus role assignment sections 1/7/8/9.1 of
+      `docs/AZURE_DEPLOYMENT.md` originally set up by hand, and — genuinely
+      new, not just codified — provisions Application Insights and Redis for
+      the first time, closing the two open cloud points Del 13/14 left
+      behind. A real `az deployment group create` run surfaced three things
+      neither of us knew going in, each fixed from Azure's own error message
+      rather than guessed in advance: Azure refuses a second role assignment
+      for the same (identity, role, scope) triple no matter its own resource
+      name, so the Key Vault/Storage role grants already made by hand in
+      Del 8/10 are deliberately not redeployed; classic Azure Cache for Redis
+      is being retired in favor of Azure Managed Redis
+      (`Microsoft.Cache/redisEnterprise`), a platform change mid-flight while
+      this Del was being built; and Managed Redis defaults new databases to
+      key-based access *disabled*, which needed enabling explicitly for the
+      Key-Vault-secret approach this project uses (see `infra/main.bicep`'s
+      and `infra/modules/redisCache.bicep`'s header comments for the full
+      account). Phase 6 complete.
 - [ ] **Phase 7 — Polish**: React frontend, dashboard, demo environment
 
 See the conversation history / project notes for the detailed breakdown of
