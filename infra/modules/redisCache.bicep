@@ -80,6 +80,17 @@ resource redisDatabase 'Microsoft.Cache/redisEnterprise/databases@2025-07-01' = 
   parent: redisEnterprise
   name: 'default'
   properties: {
+    // Explicit, not left to default: a real `az deployment group create`
+    // against Peter's subscription (2026-09-14) created this database
+    // successfully but then failed the *next* step in the same
+    // deployment — the listKeys() call below — with "The ListKeys
+    // operation is not supported when access keys are disabled." Azure
+    // Managed Redis defaults new databases to key-based access DISABLED,
+    // pushing toward Entra ID auth instead — a real, deliberate platform
+    // default, not a bug, but one this project's key-based
+    // (StackExchange.Redis + a Key Vault connection-string secret)
+    // approach genuinely needs turned on.
+    accessKeysAuthentication: 'Enabled'
     clientProtocol: 'Encrypted'
     port: 10000
     clusteringPolicy: 'OSSCluster'
