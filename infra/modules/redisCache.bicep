@@ -31,6 +31,29 @@
 // non-default access policy this module doesn't set up) — so main.bicep
 // still writes this module's connection string straight into Key Vault
 // as a secret, exactly as it did for classic Redis.
+//
+// A second real-deployment finding, on top of the resource-type switch
+// above: 2024-05-01-preview itself turned out not to be a registered API
+// version in Peter's subscription/region at all — `az deployment group
+// create` came back with NoRegisteredProviderFound and, usefully, the
+// exact list of versions that *are* registered. Pinned to 2025-07-01
+// (stable, non-preview, on that list) instead — confirmed against
+// Microsoft's own reference for that exact version
+// (https://learn.microsoft.com/rest/api/redis/redisenterprisecache/redis-enterprise/create?view=rest-redis-redisenterprisecache-2025-07-01),
+// which is also where `publicNetworkAccess` turned up as a required
+// property that the original (preview-vintage) example didn't have at
+// all — set to 'Enabled' here since this project has no VNet integration
+// anywhere (see the commented-out VNet block in the reference repo's own
+// AppService.bicep for the same non-choice), so 'Disabled' would leave
+// nothing able to reach the cache, not even the deployed Web App.
+//
+// `capacity` is deliberately omitted from `sku` below: Microsoft's schema
+// only documents capacity rules for the Enterprise/EnterpriseFlash SKU
+// families (a multiplier of nodes); Balanced (and MemoryOptimized/
+// ComputeOptimized/FlashOptimized) bake size into the SKU name itself
+// (`Balanced_B0`), so a capacity value shouldn't be needed — if that
+// assumption is wrong, Azure will say so explicitly on the next `create`,
+// the same way it did for every other gap this Del has hit so far.
 
 @description('Name of the Redis Enterprise cluster. Must be globally unique.')
 param name string
@@ -38,7 +61,7 @@ param name string
 @description('Azure region for the cache.')
 param location string
 
-resource redisEnterprise 'Microsoft.Cache/redisEnterprise@2024-05-01-preview' = {
+resource redisEnterprise 'Microsoft.Cache/redisEnterprise@2025-07-01' = {
   name: name
   location: location
   sku: {
@@ -49,10 +72,11 @@ resource redisEnterprise 'Microsoft.Cache/redisEnterprise@2024-05-01-preview' = 
   }
   properties: {
     minimumTlsVersion: '1.2'
+    publicNetworkAccess: 'Enabled'
   }
 }
 
-resource redisDatabase 'Microsoft.Cache/redisEnterprise/databases@2024-05-01-preview' = {
+resource redisDatabase 'Microsoft.Cache/redisEnterprise/databases@2025-07-01' = {
   parent: redisEnterprise
   name: 'default'
   properties: {
