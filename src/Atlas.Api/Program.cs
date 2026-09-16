@@ -189,11 +189,26 @@ try
 
     builder.Services.AddCors(options =>
     {
-        // Permissive policy for local development only (e.g. a future React dev
-        // server on http://localhost:5173, see Del 21). Tightened before any real
-        // deployment — see Del 8/19 for the Azure App Service configuration.
+        // "AllowLocalDev" started as exactly that — local dev only, React dev
+        // server on http://localhost:5173 (Del 21). But UseCors("AllowLocalDev")
+        // below applies unconditionally in every environment, including a real
+        // Azure App Service run — there's no separate "production" policy — so a
+        // deployed frontend (e.g. Azure Static Web Apps, for a portfolio demo)
+        // needs an entry here too, not a code change every time. Cors:AdditionalOrigins
+        // (empty by default, see appsettings.json) is how that happens without a
+        // redeploy: once a real Static Web App URL exists, set it as the App
+        // Setting Cors__AdditionalOrigins (comma-separated if there's ever more
+        // than one) and restart the Web App — see docs/AZURE_DEPLOYMENT.md's
+        // demo-deploy checklist (Del 21 candidate).
+        var additionalOrigins = (builder.Configuration["Cors:AdditionalOrigins"] ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        var allowedOrigins = new[] { "http://localhost:5173", "http://localhost:3000" }
+            .Concat(additionalOrigins)
+            .ToArray();
+
         options.AddPolicy("AllowLocalDev", policy =>
-            policy.WithOrigins("http://localhost:5173", "http://localhost:3000")
+            policy.WithOrigins(allowedOrigins)
                   .AllowAnyHeader()
                   .AllowAnyMethod());
     });

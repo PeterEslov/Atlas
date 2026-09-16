@@ -42,6 +42,17 @@ appsettings.*.local.json
 ## reasoning as not committing a LocalDB .mdf: it's runtime state, not source.
 .azurite/
 
+## Azurite again, but the files it writes when started WITHOUT --location
+## (see README.md step 6) — it then dumps its db state straight into the
+## current working directory instead of a subfolder: __azurite_db_blob__.json,
+## __azurite_db_blob_extent__.json, __azurite_db_queue__.json, etc., plus two
+## folders, __blobstorage__/ and __queuestorage__/. Same runtime-state
+## reasoning as .azurite/ above — just a different shape depending on how
+## Azurite happened to be started.
+__azurite*
+__blobstorage__/
+__queuestorage__/
+
 ## Node (if a React frontend is added later)
 node_modules/
 dist/
