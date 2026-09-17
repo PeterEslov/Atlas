@@ -1181,6 +1181,91 @@ project has avoided everywhere else (see `docs/AZURE_DEPLOYMENT.md`'s "you
 run this yourself" reasoning, restated in `infra/main.bicep`'s own header
 comment).
 
+**Del 21 — Frontend: React + TypeScript against the real API, not a mock.**
+`frontend/` (React 18.3, TypeScript 5.6, Vite 5.4, Tailwind CSS 3.4,
+TanStack Query 5.59, `react-router-dom` 6.26) is a full CRUD client covering
+all five entities — Tickets, Organizations, Users, Projects, Teams — plus
+Auth and a read-only Audit Log view, built entirely from reading the real
+backend source (every controller, DTO, enum, permission string and JWT
+claim) rather than guessed or pattern-matched from a typical REST API
+shape. `Program.cs`'s `AllowLocalDev` CORS policy had already whitelisted
+`http://localhost:5173`/`:3000` back in Del 8, in anticipation of exactly
+this Del.
+
+Two decisions worth calling out on their own, because both come from a
+mismatch between how a typical frontend is built and how this specific
+backend actually behaves. First, `Program.cs` never registers a
+`JsonStringEnumConverter`, so every C# enum (`TicketStatus`,
+`TicketPriority`, `OrganizationType`, `UserRole`) serializes as a plain
+number over the wire, not a string — `src/api/types.ts` mirrors each one as
+a numeric TypeScript enum with identical integer values, and every
+`<select>` submits that numeric value rather than a label. Second,
+`src/auth/permissions.ts` copies the literal permission strings from
+`Atlas.Domain/Security/Permissions.cs` and gates every nav link, button and
+route with `can(Permissions.X)`, sourced from `AuthResponseDto.permissions`
+— but this is documented explicitly, in the code and here, as a UX nicety
+only, never a security boundary. The server's `[Authorize(Policy=...)]`
+checks are the real enforcement; a user who edits the client bundle to
+un-hide a button still hits a 403 from the API, exactly as intended.
+
+Building the frontend also surfaced one genuine, pre-existing backend
+contract gap rather than a frontend bug: `AuthResponseDto` never included
+`organizationId`, even though `JwtTokenGenerator` already stamps an
+`organization_id` claim into every token it issues (see the Del 5 section
+above). Rather than changing a backend response shape for a Del scoped to
+the frontend only, `src/auth/jwt.ts` reads the claim directly out of the
+JWT's own (unverified, base64url-decoded) payload client-side — a
+pragmatic workaround, not a fix, and a real candidate for a future Del to
+close properly on the backend side instead.
+
+Verification had a real gap worth being honest about: the cloud sandbox
+this frontend was built in has no route to the npm registry (org egress
+policy, `403`/`host_not_allowed`), so `npm install`/`tsc`/a real Vite build
+were never actually run before the code reached Peter's machine. What
+verification *did* happen there was manual — a brace/paren balance check,
+an unused-import heuristic, and an import/export cross-check across all 39
+TypeScript/TSX files — which is real signal but not the same thing as a
+compiler actually agreeing the code is correct. That gap closed the moment
+Peter ran `npm install && npm run dev` locally himself.
+
+**Confirmed working end-to-end against Peter's local LocalDB-backed API
+(mid-September 2026)**, after two real, worth-recording snags along the
+way — both environment/bootstrapping issues, not bugs in the frontend
+code itself:
+
+1. The seeded demo users (`sql/002_SeedData.sql` — Anna, John) have no
+   password hash, so they can't actually log in through the app; the
+   bootstrap path is registering a fresh account via the frontend's own
+   Register form, which needs a real `organizationId` looked up directly
+   from whichever database is actually running underneath (LocalDB,
+   the `docker-compose.yml` SQL Server container, or Azure SQL — three
+   different places to run the same `SELECT Id, Name FROM
+   dbo.Organizations` query, depending on which local setup is active).
+2. An early login attempt failed with a generic browser-level "Failed to
+   fetch" — distinct from a proper 401/400 `ProblemDetails` response,
+   meaning the request never reached `ExceptionHandlingMiddleware` at
+   all. Left undiagnosed to a single root cause (most likely `Atlas.Api`
+   not yet running, or a port mismatch), but self-resolved once the API
+   was confirmed up — a reminder that this class of error is a browser/
+   network-layer symptom, not an API error, and worth ruling out first.
+
+The frontend was subsequently also verified against the Del 17
+`docker-compose.yml` stack — `Atlas.Api` inside Docker listens on port
+8080, not the 5080 `dotnet run` uses, so `frontend/.env.local`'s
+`VITE_API_BASE_URL` is the only thing that changes between the two; the
+`AllowLocalDev` CORS policy itself needed no change, since it only ever
+cares which origin the browser request comes from (`localhost:5173`), not
+which port the API happens to be listening on.
+
+One small piece of forward-looking groundwork landed alongside Del 21
+without being its own Del: `Program.cs`'s CORS setup now also reads an
+optional `Cors:AdditionalOrigins` configuration value (empty by default),
+so a future deployed frontend origin (e.g. Azure Static Web Apps, for a
+portfolio demo) can be added as a plain Azure App Setting later, without a
+code change or redeploy. Nothing consumes it yet — that's a real deploy
+this project hasn't attempted, tracked as a draft checklist in
+`docs/DEMO_DEPLOY_CHECKLIST.md` rather than documented here as done.
+
 ## Current known simplifications (by design)
 
 - Azure SQL (Del 9) reuses Peter's existing SQL login for the moment — the
@@ -1379,3 +1464,26 @@ comment).
   never runs (cost/risk, not a testing gap CI could close for free — see
   the reasoning in `infra/main.bicep`'s header comment). A green
   `BicepValidate` run is proof the templates parse, not proof they deploy.
+- `AuthResponseDto` still doesn't carry `organizationId`, even though Del
+  21's frontend needs it and the JWT already contains it as a claim —
+  `src/auth/jwt.ts` decodes the token payload client-side as a workaround
+  rather than changing the backend response shape for a frontend-only Del.
+  Adding `organizationId` to `AuthResponseDto` properly, so no client ever
+  needs to reach into an unverified JWT payload for something the server
+  already knows, is a real candidate for a future Del.
+- Del 21's permission-based UI gating (`src/auth/permissions.ts`,
+  `RequirePermission`) is real code doing real work, but it's a UX
+  convenience, not a security boundary, and it isn't tested as one: nothing
+  in the frontend automatically verifies that its gates stay in sync with
+  `Atlas.Domain/Security/RolePermissions.cs` if that file changes later. The
+  server's `[Authorize(Policy=...)]` checks remain the only actual
+  enforcement; a drift between the two would only ever produce a confusing
+  UI (a hidden button that would have worked, or a visible one that 403s),
+  never a real permission bypass.
+- Del 21 was never actually compiled or built in the environment it was
+  written in — the cloud sandbox has no route to the npm registry, so
+  `tsc`/`vite build` only ran for the first time on Peter's own machine,
+  after the code had already been delivered. Verification up to that point
+  was manual (brace/paren balance, unused-import and import/export
+  cross-checks across all 39 files) — real signal, but not a substitute for
+  a compiler actually agreeing the code type-checks.

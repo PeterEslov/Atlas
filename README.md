@@ -6,12 +6,22 @@ project that mirrors the shape of a real .NET/Azure enterprise system —
 Clean Architecture, EF Core against Azure SQL, and a build-out path through
 authentication, messaging, caching, observability, containers and CI/CD.
 
-This repository currently covers **Phase 1 — Foundation** (solution
-structure, the full SQL data model, EF Core, the first real API) and three
-slices of **Phase 2 — Real application**: local JWT authentication with
-permission-based authorization (Del 5), Organizations & Users management
-(Del 6), and Projects & Teams management (Del 7). Later phases are tracked in
-[Roadmap](#roadmap) below.
+This repository has worked through six of its seven planned phases end to
+end: solution structure, the full SQL data model and the first real API
+(**Phase 1**); local JWT authentication with permission-based
+authorization, and Organizations/Users/Projects/Teams management (**Phase
+2**); Azure App Service, Azure SQL and Blob Storage, all deployed against a
+live subscription (**Phase 3**); a background worker, Service Bus
+messaging, Redis caching and a system-wide audit trail (**Phase 4**);
+structured logging, a 93-unit/19-integration-test suite and Docker
+(**Phase 5**); and CI/CD plus the entire Azure environment redeployable
+from Bicep (**Phase 6**). **Phase 7 — Polish** is nearly there too: a full
+React frontend (Del 21) is built and verified, both locally and against
+Docker; the one open piece is an actual Azure deployment for a live demo
+(Del 22). See [Roadmap](#roadmap) below for the Del-by-Del breakdown,
+including the two remaining cleanup items carried over from earlier phases
+(Del 20's Key Vault generalization, and deciding how `Atlas.Worker` gets
+hosted in Azure).
 
 ## Architecture
 
@@ -151,18 +161,28 @@ Principle, not just a folder convention.
   Redis — see [Del 19](#roadmap) below) went from "documented plan" to
   actually provisioned in Azure for the first time via this Del; see
   [Del 19](#roadmap) below
+- **Frontend** (`frontend/` — React 18.3, TypeScript 5.6, Vite 5.4, Tailwind
+  CSS 3.4, TanStack Query 5.59, `react-router-dom` 6.26) — a full CRUD
+  client covering all five entities plus Auth and a read-only Audit Log,
+  built directly against the real API contract (numeric enums, the exact
+  `Permissions.cs` strings, the real JWT claims); see [Del 21](#roadmap)
+  below
 
-Planned for later: a React frontend (Phase 7). (Key Vault and a CI/CD
+Remaining open point: an actual Azure deployment of the frontend, for a
+live demo that doesn't need Peter's own workstation — drafted as a
+checklist in `docs/DEMO_DEPLOY_CHECKLIST.md` (Del 22 candidate) but not yet
+run against a real subscription. Everything else originally planned for
+"later" has been pulled forward instead of left for later: Key Vault and a CI/CD
 pipeline are already in place as of Del 8, Azure SQL and Blob Storage as of
 Del 9/10, a background worker as of Del 11, Service Bus publish/consume as
 of Del 12, Redis caching as of Del 13, structured logging with an optional
 Application Insights sink as of Del 14, the audit trail as of Del 15, a
 broader test suite (93 unit + 19 integration tests) as of Del 16, the whole
 local stack running in Docker as of Del 17, that Docker image verified on
-every CI run as of Del 18, and the entire Azure environment now redeployable
-from Bicep — including, as of Del 19, actually-provisioned Application
-Insights and Redis instances — all pulled forward rather than left for
-later.)
+every CI run as of Del 18, the entire Azure environment redeployable from
+Bicep — including, as of Del 19, actually-provisioned Application Insights
+and Redis instances — and, as of Del 21, the React frontend itself, covering
+every entity end to end.
 
 ## Project structure
 
@@ -233,9 +253,25 @@ scripts/
   test-del15-audit-log.sh  End-to-end smoke test for Del 15 — 7 checks across
                            User/Organization/Project/Ticket audit events plus the
                            Admin-only access check (see the "Try it" section above)
+frontend/                   Del 21 — React 18.3/TypeScript 5.6/Vite 5.4/Tailwind 3.4/
+                           TanStack Query 5.59/react-router-dom 6.26
+  src/api/                  types.ts (hand-mirrored DTOs/enums — numeric, not string,
+                           see the Technology section above), client.ts (fetch wrapper,
+                           ApiError), one module per controller
+  src/auth/                 permissions.ts (mirrors Permissions.cs literally), session.ts,
+                           jwt.ts (decodes organization_id client-side — see Del 21 in
+                           docs/ARCHITECTURE.md), AuthContext.tsx, ProtectedRoute.tsx
+  src/components/           Layout.tsx (permission-gated nav), Status.tsx, Feedback.tsx,
+                           Pagination.tsx, ui.ts (shared Tailwind class constants)
+  src/pages/                LoginPage, DashboardPage, and List/Create/Detail pages per
+                           entity (tickets/, organizations/, users/, projects/, teams/,
+                           auditlogs/)
+  App.tsx                   Full route tree, every route wrapped in ProtectedRoute/
+                           RequirePermission
 docs/
   ARCHITECTURE.md
   AZURE_DEPLOYMENT.md
+  DEMO_DEPLOY_CHECKLIST.md   Draft, not yet run end-to-end — see the file's own header
 ```
 
 ## Data model
@@ -889,7 +925,18 @@ database.
       Key-Vault-secret approach this project uses (see `infra/main.bicep`'s
       and `infra/modules/redisCache.bicep`'s header comments for the full
       account). Phase 6 complete.
-- [ ] **Phase 7 — Polish**: React frontend, dashboard, demo environment
+- [x] **Phase 7 — Polish**: Del 21 (React frontend — full CRUD across all
+      five entities, Auth, and a read-only Audit Log view, plus a
+      dashboard) confirmed working end-to-end against Peter's local
+      LocalDB-backed API and, separately, against the Del 17
+      `docker-compose.yml` stack (mid-September 2026) — see
+      `docs/ARCHITECTURE.md`'s Del 21 section for the real gotchas along
+      the way (a backend contract gap worked around client-side, and a
+      verification gap: the frontend was never actually compiled until it
+      reached Peter's own machine, since the cloud sandbox it was built in
+      has no route to the npm registry). One open point remains: an actual
+      Azure deployment of the frontend for a live demo — drafted as
+      `docs/DEMO_DEPLOY_CHECKLIST.md` (Del 22 candidate), not yet run.
 
 See the conversation history / project notes for the detailed breakdown of
 each phase (Del 1–22) — each one lands as its own set of commits/PRs so the
