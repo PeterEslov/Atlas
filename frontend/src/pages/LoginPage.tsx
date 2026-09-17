@@ -1,6 +1,8 @@
 import { useState, type FormEvent } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { authApi } from "../api/auth";
 import { UserRole, UserRoleLabels, enumOptions } from "../api/types";
 import { ErrorMessage } from "../components/Feedback";
 import { ui } from "../components/ui";
@@ -19,6 +21,17 @@ export function LoginPage() {
 
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
+
+  // featurelogin branch — only fires once the Register form is actually
+  // showing (enabled: mode === "register"), so a plain login never makes an
+  // extra request. See AuthController.GetRegistrableOrganizations's doc
+  // comment for why this is reachable without a token.
+  const organizationsQuery = useQuery({
+    queryKey: ["auth", "registrable-organizations"],
+    queryFn: () => authApi.registrableOrganizations(),
+    enabled: mode === "register",
+    staleTime: 60_000,
+  });
 
   if (isAuthenticated) {
     const redirectTo = (location.state as { from?: string } | null)?.from ?? "/";
@@ -89,14 +102,33 @@ export function LoginPage() {
           {mode === "register" && (
             <>
               <div>
-                <label className={ui.label}>Organization ID</label>
-                <input
-                  className={`${ui.input} w-full font-mono text-xs`}
-                  placeholder="GUID — se README.md/sql/002_SeedData.sql för Northstar IT/ACME AB"
+                <label className={ui.label}>Organisation</label>
+                <select
+                  className={`${ui.input} w-full`}
                   value={organizationId}
                   onChange={(e) => setOrganizationId(e.target.value)}
+                  disabled={organizationsQuery.isPending}
                   required
-                />
+                >
+                  <option value="" disabled>
+                    {organizationsQuery.isPending ? "Laddar organisationer..." : "Välj organisation"}
+                  </option>
+                  {organizationsQuery.data?.map((org) => (
+                    <option key={org.id} value={org.id}>
+                      {org.name}
+                    </option>
+                  ))}
+                </select>
+                {organizationsQuery.isError && (
+                  <p className="mt-1 text-xs text-red-600">
+                    Kunde inte hämta organisationer — kontrollera att Atlas.Api kör.
+                  </p>
+                )}
+                {organizationsQuery.isSuccess && organizationsQuery.data.length === 0 && (
+                  <p className="mt-1 text-xs text-gray-500">
+                    Inga organisationer hittades — en Admin behöver skapa en först.
+                  </p>
+                )}
               </div>
               <div>
                 <label className={ui.label}>Roll</label>

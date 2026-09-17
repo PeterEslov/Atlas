@@ -2,6 +2,7 @@ using Atlas.Application.Auth.Dtos;
 using Atlas.Application.Common;
 using Atlas.Application.Common.Exceptions;
 using Atlas.Application.Common.Interfaces;
+using Atlas.Application.Organizations.Dtos;
 using Atlas.Domain.Entities;
 using Atlas.Domain.Security;
 using Microsoft.Extensions.Logging;
@@ -12,6 +13,7 @@ namespace Atlas.Application.Auth.Services;
 public sealed class AuthService : IAuthService
 {
     private readonly IUserRepository _userRepository;
+    private readonly IOrganizationRepository _organizationRepository;
     private readonly IPasswordHasher _passwordHasher;
     private readonly IJwtTokenGenerator _jwtTokenGenerator;
     private readonly IUnitOfWork _unitOfWork;
@@ -20,6 +22,7 @@ public sealed class AuthService : IAuthService
 
     public AuthService(
         IUserRepository userRepository,
+        IOrganizationRepository organizationRepository,
         IPasswordHasher passwordHasher,
         IJwtTokenGenerator jwtTokenGenerator,
         IUnitOfWork unitOfWork,
@@ -27,6 +30,7 @@ public sealed class AuthService : IAuthService
         ILogger<AuthService> logger)
     {
         _userRepository = userRepository;
+        _organizationRepository = organizationRepository;
         _passwordHasher = passwordHasher;
         _jwtTokenGenerator = jwtTokenGenerator;
         _unitOfWork = unitOfWork;
@@ -101,6 +105,21 @@ public sealed class AuthService : IAuthService
 
         _logger.LogInformation("User {UserId} logged in", user.Id);
         return BuildAuthResponse(user);
+    }
+
+    public async Task<IReadOnlyList<OrganizationOptionDto>> GetRegistrableOrganizationsAsync(CancellationToken cancellationToken)
+    {
+        // MaxPageSize (100), not the default 25 — this is the entire dropdown's
+        // source, not a paginated list a caller scrolls through, and IsActive =
+        // true so a deactivated organization can't be picked mid-registration.
+        // OrganizationRepository.SearchAsync already orders by Name, matching
+        // what a dropdown should show. A subscription with more than 100 active
+        // organizations would silently only show the first 100 here — a known
+        // limitation, not something this endpoint tries to solve; see the doc
+        // comment on OrganizationOptionDto for the rest of the reasoning.
+        var query = new OrganizationListQuery { IsActive = true, PageSize = OrganizationListQuery.MaxPageSize };
+        var (items, _) = await _organizationRepository.SearchAsync(query, cancellationToken);
+        return items.Select(o => new OrganizationOptionDto(o.Id, o.Name)).ToList();
     }
 
     private AuthResponseDto BuildAuthResponse(User user)
