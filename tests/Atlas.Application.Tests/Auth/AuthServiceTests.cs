@@ -2,6 +2,7 @@ using Atlas.Application.Auth.Dtos;
 using Atlas.Application.Auth.Services;
 using Atlas.Application.Common.Exceptions;
 using Atlas.Application.Common.Interfaces;
+using Atlas.Application.Organizations.Dtos;
 using Atlas.Domain.Entities;
 using Atlas.Domain.Enums;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -15,13 +16,15 @@ namespace Atlas.Application.Tests.Auth;
 /// only two anonymous endpoints in the whole API (see README's Authentication
 /// section), so getting their failure paths right matters more here than
 /// almost anywhere else in the codebase. These tests mock every dependency
-/// (IUserRepository, IPasswordHasher, IJwtTokenGenerator, IUnitOfWork,
-/// IAuditLogRepository) so each test is about AuthService's own orchestration
-/// logic, never about a real database, a real hash, or a real signed JWT.
+/// (IUserRepository, IOrganizationRepository, IPasswordHasher,
+/// IJwtTokenGenerator, IUnitOfWork, IAuditLogRepository) so each test is
+/// about AuthService's own orchestration logic, never about a real
+/// database, a real hash, or a real signed JWT.
 /// </summary>
 public class AuthServiceTests
 {
     private readonly Mock<IUserRepository> _userRepository = new();
+    private readonly Mock<IOrganizationRepository> _organizationRepository = new();
     private readonly Mock<IPasswordHasher> _passwordHasher = new();
     private readonly Mock<IJwtTokenGenerator> _jwtTokenGenerator = new();
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
@@ -31,6 +34,7 @@ public class AuthServiceTests
 
     private AuthService CreateSut() => new(
         _userRepository.Object,
+        _organizationRepository.Object,
         _passwordHasher.Object,
         _jwtTokenGenerator.Object,
         _unitOfWork.Object,
@@ -178,5 +182,35 @@ public class AuthServiceTests
         // Never even asked the JWT generator for a token — a deactivated
         // account has to fail before that point, not after.
         _jwtTokenGenerator.Verify(j => j.GenerateToken(It.IsAny<User>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task GetRegistrableOrganizationsAsync_QueriesOnlyActiveOrganizationsAtMaxPageSizeAndMapsToTheMinimalDto()
+    {
+        var northstar = Organization.Create("Northstar IT", OrganizationType.Internal);
+        var acme = Organization.Create("ACME AB", OrganizationType.Customer);
+
+        OrganizationListQuery? capturedQuery = null;
+        _organizationRepository
+            .Setup(r => r.SearchAsync(It.IsAny<OrganizationListQuery>(), It.IsAny<CancellationToken>()))
+            .Callback<OrganizationListQuery, CancellationToken>((q, _) => capturedQuery = q)
+            .ReturnsAsync((new List<Organization> { northstar, acme }, 2));
+
+        var sut = CreateSut();
+        var result = await sut.GetRegistrableOrganizationsAsync(CancellationToken.None);
+
+        // Deactivated organizations must never reach an anonymous caller, and
+        // this is the entire dropdown's source, not one page of a longer
+        // list — see the doc comment on GetRegistrableOrganizationsAsync.
+        Assert.NotNull(capturedQuery);
+        Assert.True(capturedQuery!.IsActive);
+        Assert.Equal(OrganizationListQuery.MaxPageSize, capturedQuery.PageSize);
+
+        // The minimal DTO only — never OrganizationDto's fuller shape (Type,
+        // IsActive, CreatedAtUtc), consistent with OrganizationOptionDto's own
+        // doc comment on why an anonymous caller sees only {id, name}.
+        Assert.Equal(2, result.Count);
+        Assert.Contains(result, o => o.Id == northstar.Id && o.Name == "Northstar IT");
+        Assert.Contains(result, o => o.Id == acme.Id && o.Name == "ACME AB");
     }
 }

@@ -94,4 +94,26 @@ public class AuthEndpointsTests
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
+
+    /// <summary>
+    /// featurelogin branch: GET /api/auth/organizations powers the Register
+    /// form's dropdown, so — unlike /api/tickets above — it has to stay
+    /// reachable with no bearer token at all. Confirms both that it isn't
+    /// caught by the same authorization requirement every other controller
+    /// has, and that it actually returns the organization ApiFactory seeds
+    /// for every integration test (see AuthTestHelper.RegisterAsync's own
+    /// use of SeededOrganizationId above).
+    /// </summary>
+    [Fact]
+    public async Task GetRegistrableOrganizations_WithNoBearerToken_Returns200WithTheSeededOrganization()
+    {
+        var client = _factory.CreateClient();
+
+        var response = await client.GetAsync("/api/auth/organizations");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<List<OrganizationOptionDto>>();
+        Assert.NotNull(body);
+        Assert.Contains(body!, o => o.Id == _factory.SeededOrganizationId);
+    }
 }
