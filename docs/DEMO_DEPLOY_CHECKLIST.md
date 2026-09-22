@@ -36,6 +36,24 @@ Svarar `/health` redan `Healthy`? Backend lever. Hoppa till **Steg 3**
 innan du river ner något, ifall det stått uppe ett tag utan att du tänkt på
 det.
 
+**Notera (2026-09-22): Redis är borttaget separat, oavsett vad `/health`
+ovan säger.** Den kostade pengar varje dag (Redis går inte att pausa, bara
+ta bort — se `docs/AZURE_DEPLOYMENT.md` avsnitt 12) och togs bort för sig:
+
+```bash
+az redisenterprise delete --name redis-projectatlas-dev-sc --resource-group rg-projectatlas-dev-sc -y
+```
+
+Så: `/health` kan mycket väl svara `Healthy` (appen är fail-open utan
+Redis, se `docs/ARCHITECTURE.md`s Del 13-avsnitt) samtidigt som Redis
+faktiskt saknas. Kolla separat om du behöver den tillbaka inför demot:
+
+```bash
+az redisenterprise show --name redis-projectatlas-dev-sc --resource-group rg-projectatlas-dev-sc --query provisioningState -o tsv
+# tomt/fel -> kör om `az deployment group create` mot infra/main.bicep (Steg 1)
+# för att få tillbaka bara Redis-delen också
+```
+
 ## Steg 1: Deploya backend-infran (om den inte redan lever)
 
 ```bash
