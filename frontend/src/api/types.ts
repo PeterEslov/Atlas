@@ -126,6 +126,15 @@ export interface AuthResponseDto {
   permissions: string[];
 }
 
+// featurelogin branch — GET /api/auth/organizations, anonymous, powers the
+// Register form's organization dropdown. Deliberately minimal (just {id,
+// name}) to match AuthController's OrganizationOptionDto — never the fuller
+// OrganizationDto below, which is only reachable once logged in.
+export interface OrganizationOptionDto {
+  id: string;
+  name: string;
+}
+
 // ---- Tickets (Del 1-4, 11-13) -----------------------------------------------
 
 export interface TicketDto {

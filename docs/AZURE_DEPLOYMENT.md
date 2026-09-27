@@ -1107,6 +1107,29 @@ curl "https://app-projectatlas-dev-sc.azurewebsites.net/health"
 # deploymentets ~/Modify-steg på httpsOnly
 ```
 
+**Status, 2026-09-22: Redis-instansen (`redis-projectatlas-dev-sc`,
+Azure Managed Redis) är borttagen.** Den låg och kostade pengar varje dag
+utan att faktiskt behövas just då — se avsnittet ovan om att Redis (till
+skillnad från t.ex. en VM) inte går att stoppa/pausa, bara ta bort:
+Microsoft Learns egen FAQ är entydig ("billed... from time a cache is
+created until the time that the cache is deleted. There's no option for
+stopping or pausing cache billing.").
+
+```bash
+az redisenterprise delete --name redis-projectatlas-dev-sc --resource-group rg-projectatlas-dev-sc -y
+```
+
+Notera: det här kommandot tar bara bort Redis-resursen, inget annat i
+`rg-projectatlas-dev-sc`. Appen kraschar inte av det —
+`RedisTicketStatsCache` är fail-open (se `docs/ARCHITECTURE.md`s Del
+13-avsnitt), så `/api/tickets/stats` faller tillbaka på databasen och
+loggar en varning istället för att svara med fel. `Redis--ConnectionString`
+i Key Vault pekar nu mot en resurs som inte finns, vilket är ofarligt av
+samma anledning. Vill du ha Redis tillbaka (t.ex. inför en riktig demo)
+räcker det att köra `az deployment group create` igen mot `infra/main.bicep`
+(kommandot längre upp i det här avsnittet) — `redisSecret`-modulen skriver
+automatiskt om Key Vault-hemligheten åt dig, inget manuellt steg där.
+
 Fas 6 är därmed helt klar (Del 18 och Del 19, båda bekräftade fungerande
 end-to-end mot skarp Azure) — se README.md:s Roadmap. Fas 4:s öppna punkt
 är nu bara *var* `Atlas.Worker` ska köras i Azure (avsnitt 9 ovan) — Redis

@@ -54,4 +54,24 @@ public sealed class AuthController : ControllerBase
         var result = await _authService.LoginAsync(request, cancellationToken);
         return Ok(result);
     }
+
+    /// <summary>
+    /// GET /api/auth/organizations
+    ///
+    /// featurelogin branch: powers the Register form's organization dropdown
+    /// (frontend/src/pages/LoginPage.tsx) so a new user picks an organization
+    /// by name instead of pasting a raw GUID. Anonymous on purpose, same
+    /// reasoning as Register/Login above — this has to be reachable before a
+    /// token exists — but deliberately returns OrganizationOptionDto, not
+    /// OrganizationsController's fuller OrganizationDto, so an anonymous
+    /// visitor only ever sees {id, name} for active organizations.
+    /// </summary>
+    [HttpGet("organizations")]
+    [ProducesResponseType(typeof(IReadOnlyList<OrganizationOptionDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<IReadOnlyList<OrganizationOptionDto>>> GetRegistrableOrganizations(
+        CancellationToken cancellationToken)
+    {
+        var result = await _authService.GetRegistrableOrganizationsAsync(cancellationToken);
+        return Ok(result);
+    }
 }
