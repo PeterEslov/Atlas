@@ -41,7 +41,7 @@ export function onUnauthorized(handler: () => void): () => void {
 }
 
 /** Turns a query-params object into a `?a=1&b=2` string, dropping undefined/null/empty-string values entirely (not the same as sending them as ""). */
-export function toQueryString(params: Record<string, unknown>): string {
+export function toQueryString(params: object): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (value === undefined || value === null || value === "") continue;
