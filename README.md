@@ -23,6 +23,8 @@ including the two remaining cleanup items carried over from earlier phases
 (Del 20's Key Vault generalization, and deciding how `Atlas.Worker` gets
 hosted in Azure).
 
+![Project Atlas – dashboard](docs/atlas-dashboard.png)
+
 ## Architecture
 
 ```mermaid
