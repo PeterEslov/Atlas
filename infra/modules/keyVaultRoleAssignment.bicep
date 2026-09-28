@@ -31,7 +31,7 @@ param principalId string
 // Worth a quick cross-check against that page before a real deployment,
 // same "verify rather than trust a remembered value" habit as the NuGet
 // package versions in docs/AZURE_DEPLOYMENT.md section 8.
-var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
+var keyVaultSecretsUserRoleId = '4633458b-denna-ska-bytas-ut'
 
 resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
   name: keyVaultName
